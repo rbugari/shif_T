@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+python-dotenv
+supabase
+langgraph
+langchain
+langchain-openai
+sqlglot
+lxml
+pydantic
+networkx
+pytest
+httpx
+python-multipart
