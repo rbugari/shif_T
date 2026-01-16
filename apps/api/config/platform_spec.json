@@ -1,0 +1,24 @@
+{
+  "platform": "Databricks_LTS_13_3",
+  "engine": "Spark_3_4_PySpark",
+  "qa_rules": {
+    "how_to_handle_identity": "Use 'GENERATED ALWAYS AS IDENTITY' in DDL. During migration, reset the sequence to MAX(id) + 1.",
+    "how_to_handle_scd_type_2": "Implement using a Delta Lake MERGE statement with a subquery logic to handle record expiration (end_dates) and new inserts concurrently.",
+    "how_to_handle_lookups": "Transform SSIS Lookups into Spark LEFT JOINs against dimension tables. Avoid Cartesian products and ensure join keys have identical types.",
+    "how_to_handle_unknown_members": "Enforce a record with ID -1 for every dimension. Coalesce all incoming NULL foreign keys to -1 to maintain referential integrity.",
+    "data_type_mapping": {
+      "DT_I4": "INTEGER",
+      "DT_WSTR": "STRING",
+      "DT_CY": "DECIMAL(19,4)",
+      "DT_BOOL": "BOOLEAN",
+      "DT_NUMERIC": "DECIMAL({p},{s})",
+      "DT_DATE": "TIMESTAMP",
+      "int": "INTEGER",
+      "varchar": "STRING",
+      "nvarchar": "STRING",
+      "money": "DECIMAL(19,4)",
+      "datetime": "TIMESTAMP"
+    },
+    "optimization_strategy": "Enable Z-ORDER on high-cardinality columns (Business Keys). Use Liquid Clustering for large dimensions."
+  }
+}

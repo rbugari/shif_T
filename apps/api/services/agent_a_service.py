@@ -3,6 +3,14 @@ from langchain_openai import AzureChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from typing import Dict, Any
 import json
+try:
+    from apps.api.utils.logger import logger
+except ImportError:
+    try:
+        from utils.logger import logger
+    except ImportError:
+        # Fallback for when running directly or tests
+        from ..utils.logger import logger
 
 class AgentAService:
     """Service for Agent A (Detective) using Azure OpenAI."""
@@ -46,6 +54,14 @@ class AgentAService:
         4. Synthesize the Mesh Graph. Return ONLY the JSON requested in the System Prompt.
         """
         
+        logger.info(f"Agent A analyzing manifest for {manifest.get('project_id')}...", "Agent A")
+        
+        # --- DEBUG LOGGING START ---
+        # User requested "more complete dump" of parameters
+        logger.debug(f"=== [Agent A] SYSTEM PROMPT ===\n{system_prompt}\n===============================", "Agent A")
+        logger.debug(f"=== [Agent A] USER MESSAGE (MANIFEST) ===\n{user_message}\n=======================================", "Agent A")
+        # --- DEBUG LOGGING END ---
+
         messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_message)
@@ -56,6 +72,8 @@ class AgentAService:
         response = await self.llm.ainvoke(messages)
         content = response.content
         
+        logger.debug(f"=== [Agent A] RAW RESPONSE ===\n{content}\n==============================", "Agent A")
+        
         # Clean potential markdown formatting
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
@@ -65,6 +83,7 @@ class AgentAService:
         try:
             return json.loads(content)
         except json.JSONDecodeError:
+            logger.error("Failed to parse Agent A response", "Agent A")
             # Fallback for partial JSON or comments
             return {
                 "error": "Failed to parse LLM response", 

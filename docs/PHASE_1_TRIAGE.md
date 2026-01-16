@@ -53,5 +53,14 @@ Shift-T utiliza un sistema de diseño basado en **Glassmorphism** y **Atomic Des
 *   **Toolbars Dinámicas:** Las barras de herramientas son icon-only y se activan al hover para maximizar el "espacio de pensamiento".
 *   **Modo Fullscreen:** Un estado de React que altera el Z-Index y las dimensiones del contenedor principal para cubrir el viewport (`fixed inset-0`), permitiendo una inmersión total en la arquitectura.
 
+
+## ⏭️ Próximos Pasos: Hacia la Generación
+
+Una vez que has validado tu inventario y diseñado tu malla en esta Fase 1, estás listo para "aprobar" el plan.
+
+1.  **Lock Scope:** Al hacer clic en "Approve Triage", el sistema bloquea el inventario.
+2.  **Transition:** El proyecto avanza al estado `DRAFTING` (Stage 2).
+3.  **Generación:** Se habilita el motor de **Code Generation** descrito en detalle en [Fase 2: Drafting & Code Generation](PHASE_2_DRAFTING.md).
+
 ---
-*Shift-T Documentation Framework v1.0*
+*Shift-T Documentation Framework v1.1*

@@ -60,3 +60,57 @@ class SSISParser:
     @staticmethod
     def get_hash(content: str) -> str:
         return hashlib.sha256(content.encode()).hexdigest()
+
+    def get_data_flow_components(self) -> List[Dict[str, Any]]:
+        """
+        Extracts components from Data Flow Tasks (Pipeline).
+        Crucial for identifying Lookups and Sources vs Destinations.
+        """
+        components = []
+        # Data Flow namespace usually differs or is inline types, but 'component' tag is standard in pipeline
+        # Note: namespace parsing in pipeline XML can be tricky as it's often CDATA or nested.
+        # We'll look for the 'component' tag regardless of namespace for robustness in this pass.
+        
+        # Searching deeply for components
+        # In a real .dtsx, Pipeline XML is often inside a wrapper. 
+        # For this logic, we search for 'component' elements locally or via generic xpath.
+        
+        # NOTE: SSIS 2012+ uses 'component' tags with 'contactInfo' that reveals type.
+        for comp in self.tree.xpath('//*[local-name()="component"]'):
+            ref_id = comp.get('refId') 
+            name = comp.get('name')
+            contact_info = comp.get('contactInfo') or ""
+            
+            comp_type = "UNKNOWN"
+            if "Lookup" in contact_info or "Lookup" in name:
+                comp_type = "LOOKUP"
+            elif "Source" in contact_info or "Source" in name:
+                comp_type = "SOURCE"
+            elif "Destination" in contact_info or "Destination" in name:
+                comp_type = "DESTINATION"
+            
+            # Extract connections (which table/file is it touching?)
+            connections = []
+            for conn in comp.xpath('.//*[local-name()="connection"]'):
+                 connections.append({
+                     "connection_manager_id": conn.get('connectionManagerID'),
+                     "name": conn.get('name')
+                 })
+                 
+            # Extract properties (like SqlCommand or TableName)
+            properties = {}
+            for prop in comp.xpath('.//*[local-name()="property"]'):
+                prop_name = prop.get('name')
+                prop_val = prop.text
+                if prop_name in ["OpenRowset", "SqlCommand", "TableOrViewName"]:
+                    properties[prop_name] = prop_val
+
+            components.append({
+                "ref_id": ref_id,
+                "name": name,
+                "type": comp_type,
+                "connections": connections,
+                "properties": properties
+            })
+            
+        return components

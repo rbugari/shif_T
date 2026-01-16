@@ -15,8 +15,9 @@ class AgentFService:
         self.prompt_path = os.path.join(os.path.dirname(__file__), "../prompts/agent_f_critic.md")
         self.standards_path = os.path.join(os.path.dirname(__file__), "../prompts/coding_standards.md")
 
-    def _load_prompt(self, path: str) -> str:
-        with open(path, "r", encoding="utf-8") as f:
+    def _load_prompt(self, path: str = None) -> str:
+        target_path = path or self.prompt_path
+        with open(target_path, "r", encoding="utf-8") as f:
             return f.read()
 
     async def review_code(self, task_info: Dict[str, Any], generated_code: str) -> Dict[str, Any]:

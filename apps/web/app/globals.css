@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #002D72;
+  /* Sopra Steria Navy */
+  --color-secondary: #00A9E0;
+  /* Sopra Steria Light Blue */
+  --color-accent: #E1E1E1;
+
+  --font-sans: "Inter", sans-serif;
+}
+
+:root {
+  --background: #ffffff;
+  --foreground: #101828;
+}
+
+[data-theme='dark'] {
+  --background: #0B0F19;
+  --foreground: #F9FAFB;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  transition: background-color 0.3s, color 0.3s;
+}
+
+.card-premium {
+  @apply rounded-xl border border-gray-200 bg-white p-6 shadow-sm transition-all hover:shadow-md;
+}
+
+/* Specific dark mode override for apply since [data-theme] is used instead of media query */
+[data-theme='dark'] .card-premium {
+  @apply border-gray-800 bg-gray-900;
+}

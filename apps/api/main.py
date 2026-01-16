@@ -32,6 +32,21 @@ async def get_agent_a_prompt():
     agent_a = AgentAService()
     return {"prompt": agent_a._load_prompt()}
 
+@app.get("/prompts/agent-c")
+async def get_agent_c_prompt():
+    agent_c = AgentCService()
+    return {"prompt": agent_c._load_prompt()}
+
+@app.get("/prompts/agent-f")
+async def get_agent_f_prompt():
+    agent_f = AgentFService()
+    return {"prompt": agent_f._load_prompt()}
+
+@app.get("/prompts/agent-g")
+async def get_agent_g_prompt():
+    agent_g = AgentGService()
+    return {"prompt": agent_g._load_prompt()}
+
 @app.get("/ping")
 async def ping():
     return {"status": "ok"}
@@ -228,18 +243,25 @@ async def get_layout(project_id: str):
     layout = await db.get_project_layout(project_id)
     return layout or {}
 
+@app.patch("/assets/{asset_id}")
+async def patch_asset(asset_id: str, updates: Dict[str, Any]):
+    """Updates asset metadata (type, selected status)."""
+    db = SupabasePersistence()
+    success = await db.update_asset_metadata(asset_id, updates)
+    return {"success": success}
+
 @app.get("/projects/{project_id}/assets")
 async def get_project_assets(project_id: str):
     """Returns a scanned inventory of project assets."""
     db = SupabasePersistence()
-    project_folder = project_id
-    if "-" in project_id: # Heuristic for UUID
-        resolved_name = await db.get_project_name_by_id(project_id)
-        if resolved_name:
-            project_folder = resolved_name
+    # We return the PERSISTED assets from the DB.
+    resolved_uuid = project_id
+    if "-" not in project_id: # Heuristic for UUID
+        u = await db.get_project_id_by_name(project_id)
+        if u: resolved_uuid = u
             
-    # We could cache this result in DB, but for Triage iterate fast, we scan live.
-    return DiscoveryService.scan_project(project_folder)
+    assets = await db.get_project_assets(resolved_uuid)
+    return {"assets": assets}
 
 class TriageParams(BaseModel):
     system_prompt: Optional[str] = None
@@ -250,12 +272,27 @@ async def run_triage(project_id: str, params: TriageParams):
     """Re-runs the triage (discovery) process using agentic reasoning."""
     db = SupabasePersistence()
     
-    # Resolve UUID or Name to the correct folder name
+    # Resolve UUID and Name correctly
+    project_uuid = project_id
     project_folder = project_id
-    if "-" in project_id: # Heuristic for UUID
+    
+    if "-" in project_id: # Heuristic: if UUID, get name for folder
         resolved_name = await db.get_project_name_by_id(project_id)
         if resolved_name:
             project_folder = resolved_name
+    else: # If name, get UUID for DB operations
+        resolved_uuid = await db.get_project_id_by_name(project_id)
+        if resolved_uuid:
+            project_uuid = resolved_uuid
+
+    # GOVERNANCE CHECK: TRIAGE is only allowed in TRIAGE mode.
+    current_status = await db.get_project_status(project_uuid)
+    if current_status == "DRAFTING":
+        return {
+            "assets": [],
+            "log": "[ERROR] Project is in DRAFTING mode. Triage is locked. Unlock project to modify scope.",
+            "error": "Project is in DRAFTING mode"
+        }
 
     log_lines = []
     log_lines.append(f"[Start] Initializing Shift-T Triage Agent for Project: {project_id} (Folder: {project_folder})")
@@ -313,12 +350,33 @@ async def run_triage(project_id: str, params: TriageParams):
         }
 
     # 3. Persistence (Supabase)
-    log_lines.append("[Step 3] Persisting Mesh Graph...")
-    db = SupabasePersistence()
+    log_lines.append("[Step 3] Persisting Mesh Graph and Discovered Assets...")
     
-    # We map the Agent's "nodes" back to the format our Frontend Graph expects (id, position, data)
-    # The Agent returns semantically rich nodes. We need to layout or just save them.
-    # For now, we save raw layout or let Frontend handle auto-layout.
+    # NEW: Persist the scanner inventory to DB
+    db_assets = []
+    for item in manifest["file_inventory"]:
+        # Find agent info for this file
+        agent_node = next((n for n in nodes if n["id"] == item["path"]), None)
+        
+        # Determine category (type in DB)
+        category = agent_node["category"] if agent_node else "IGNORED" 
+        if not agent_node:
+            # Fallback for files not analyzed by Agent A
+            category = DiscoveryService._map_extension_to_type(item["name"].split('.')[-1].lower() if '.' in item["name"] else 'none')
+
+        db_assets.append({
+            "filename": item["name"],
+            "type": category,
+            "source_path": item["path"],
+            "metadata": item.get("metadata", {}),
+            # Important: Select any asset that is not IGNORED (matches graph eligibility)
+            "selected": True if category != "IGNORED" else False
+        })
+    
+    saved_assets = await db.batch_save_assets(project_uuid, db_assets)
+    # Create lookup map for UUIDs: source_path -> id
+    asset_map = { a["source_path"]: a["id"] for a in saved_assets }
+
     
     # Transform Agent Nodes to ReactFlow Nodes (basic)
     rf_nodes = []
@@ -326,8 +384,11 @@ async def run_triage(project_id: str, params: TriageParams):
     graph_eligible = [n for n in nodes if n.get("category") != "IGNORED"]
     
     for i, n in enumerate(graph_eligible):
+        # Find UUID for this node
+        n_uuid = asset_map.get(n["id"], n["id"]) # Fallback to path if not found (shouldn't happen)
+        
         rf_nodes.append({
-            "id": n["id"],
+            "id": n_uuid, # Use UUID for Graph Nodes too!
             "type": "custom", 
             "position": {"x": 200 + (i % 5 * 250), "y": 100 + (i // 5 * 150)}, # Better grid-like layout
             "data": { 
@@ -340,15 +401,19 @@ async def run_triage(project_id: str, params: TriageParams):
         
     rf_edges = []
     for e in edges:
+        # Resolve edge source/target to UUIDs if they mirror paths
+        src_uid = asset_map.get(e['from'], e['from'])
+        tgt_uid = asset_map.get(e['to'], e['to'])
+        
         rf_edges.append({
-            "id": f"e{e['from']}-{e['to']}",
-            "source": e['from'],
-            "target": e['to'],
+            "id": f"e{src_uid}-{tgt_uid}",
+            "source": src_uid,
+            "target": tgt_uid,
             "label": e.get('type', 'SEQUENTIAL')
         })
         
-    await db.save_project_layout(project_id, {"nodes": rf_nodes, "edges": rf_edges})
-    log_lines.append("[Success] Graph saved to database.")
+    await db.save_project_layout(project_uuid, {"nodes": rf_nodes, "edges": rf_edges})
+    log_lines.append("[Success] Graph and Assets saved to database.")
     
     # Map back to assets list for the grid view
     # We merge the scanner inventory with agent intelligence
@@ -356,15 +421,19 @@ async def run_triage(project_id: str, params: TriageParams):
     for item in manifest["file_inventory"]:
         # Find agent info for this file
         agent_node = next((n for n in nodes if n["id"] == item["path"]), None)
+        # Find UUID
+        item_uuid = asset_map.get(item["path"])
         
-        final_assets.append({
-            "id": item["path"],
-            "name": item["name"],
-            "type": agent_node["category"] if agent_node else "CORE", # Use Agent category if available
-            "status": "analyzed" if agent_node else "unlinked",
-            "tags": str(item["signatures"]),
-            "dependencies": [] # edges are in the graph now
-        })
+        if item_uuid:
+            final_assets.append({
+                "id": item_uuid, # THIS IS THE FIX: Return UUID
+                "name": item["name"],
+                "type": agent_node["category"] if agent_node else "CORE", # Use Agent category if available
+                "status": "analyzed" if agent_node else "unlinked",
+                "tags": str(item["signatures"]),
+                "selected": True if (agent_node and agent_node["category"] != "IGNORED") else False,
+                "dependencies": [] # edges are in the graph now
+            })
 
     return {
         "assets": final_assets,
@@ -401,6 +470,25 @@ async def list_projects():
     db = SupabasePersistence()
     return await db.list_projects()
 
+@app.get("/projects/{project_id}")
+async def get_project_details(project_id: str):
+    """Returns project details (name, repo_url, etc.) by ID."""
+    db = SupabasePersistence()
+    
+    # 1. Try to find by ID first
+    metadata = await db.get_project_metadata(project_id)
+    if metadata:
+        return {"id": project_id, **metadata}
+    
+    # 2. Fallback: maybe ID passed IS the name?
+    uuid = await db.get_project_id_by_name(project_id)
+    if uuid:
+        metadata = await db.get_project_metadata(uuid)
+        if metadata:
+            return {"id": uuid, **metadata}
+        
+    return {"error": "Project not found"}
+
 @app.post("/projects/create")
 async def create_project(
     name: str = Form(...),
@@ -414,7 +502,7 @@ async def create_project(
     
     # 1. Register in Database (Supabase)
     db = SupabasePersistence()
-    real_id = await db.get_or_create_project(name) # In a real app we might use project_id as ID or verify uniqueness
+    real_id = await db.get_or_create_project(name, github_url) # Pass github_url
     # Note: get_or_create_project returns ID based on name. 
     # For this demo, we assume the user-generated 'project_id' matches or we just use the ID returned by DB for folder.
     
@@ -467,12 +555,108 @@ async def delete_project(project_id: str):
         }
     }
 
+@app.get("/projects/{project_id}/files")
+async def list_project_files(project_id: str):
+    """Returns the file tree for the project's output directory."""
+    # 1. Resolve Project Name if ID is UUID
+    db = SupabasePersistence()
+    project_name = project_id
+    if "-" in project_id:
+        n = await db.get_project_name_by_id(project_id)
+        if n: project_name = n
+        
+    tree = PersistenceService.get_project_files(project_name)
+    return tree
+
+@app.get("/projects/{project_id}/files/content")
+async def get_file_content(project_id: str, path: str):
+    """Returns the content of a specific file."""
+    # Resolve Project Name if ID is UUID
+    db = SupabasePersistence()
+    project_name = project_id
+    if "-" in project_id:
+        n = await db.get_project_name_by_id(project_id)
+        if n: project_name = n
+        
+    try:
+        content = PersistenceService.read_file_content(project_name, path)
+        return {"content": content}
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        return {"error": f"Failed to read file: {e}"}
+
+from services.migration_orchestrator import MigrationOrchestrator
+
+@app.post("/transpile/orchestrate")
+async def trigger_orchestration(payload: Dict[str, Any]):
+    """Triggers the full Migration Orchestrator (Agents C -> F -> G)."""
+    project_id = payload.get("project_id")
+    limit = payload.get("limit", 0)
+    
+    if not project_id:
+        return {"error": "project_id is required"}
+        
+    # 1. Resolve Project Name (Orchestrator expects Name/Folder currently)
+    db = SupabasePersistence()
+    project_name = project_id
+    if "-" in project_id:
+        n = await db.get_project_name_by_id(project_id)
+        if n: project_name = n
+
+    orchestrator = MigrationOrchestrator(project_name)
+    result = await orchestrator.run_full_migration(limit=limit)
+    return result
+
 @app.post("/projects/{project_id}/reset")
 async def reset_project(project_id: str):
     """Clears triage results for a project, resetting it to stage 1."""
     db = SupabasePersistence()
     success = await db.reset_project_data(project_id)
     return {"success": success}
+
+@app.post("/projects/{project_id}/approve")
+async def approve_triage(project_id: str):
+    """Locks the project scope and transitions to DRAFTING state."""
+    db = SupabasePersistence()
+    
+    # Heuristic: verify UUID vs Name
+    project_uuid = project_id
+    if "-" not in project_id:
+        u = await db.get_project_id_by_name(project_id)
+        if u: project_uuid = u
+
+    # Check validation rules? (e.g. must have assets selected)
+    # For now, just transition.
+    success_status = await db.update_project_status(project_uuid, "DRAFTING")
+    success_stage = await db.update_project_stage(project_uuid, "2")
+    return {"success": success_status and success_stage, "status": "DRAFTING"}
+
+@app.post("/projects/{project_id}/unlock")
+async def unlock_triage(project_id: str):
+    """Unlocks the project scope and transitions back to TRIAGE state."""
+    db = SupabasePersistence()
+    
+    project_uuid = project_id
+    if "-" not in project_id:
+        u = await db.get_project_id_by_name(project_id)
+        if u: project_uuid = u
+
+    success = await db.update_project_status(project_uuid, "TRIAGE")
+    return {"success": success, "status": "TRIAGE"}
+
+@app.get("/projects/{project_id}/status")
+async def get_project_status(project_id: str):
+    """Returns the current governance status."""
+    db = SupabasePersistence()
+    
+    project_uuid = project_id
+    if "-" not in project_id:
+        u = await db.get_project_id_by_name(project_id)
+        if u: project_uuid = u
+        
+    status = await db.get_project_status(project_uuid)
+    return {"status": status}
 
 if __name__ == "__main__":
     import uvicorn

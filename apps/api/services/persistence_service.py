@@ -120,19 +120,81 @@ class PersistenceService:
             print(f"Error initializing project: {e}")
             return False
 
+    @classmethod
+    def get_project_files(cls, project_id: str) -> Dict[str, Any]:
+        """Returns a recursive query of the project's Output directory."""
+        # Clean ID just in case
+        folder_name = "".join([c if c.isalnum() else "_" for c in project_id])
+        solution_path = os.path.join(cls.BASE_DIR, folder_name)
+        output_path = os.path.join(solution_path, "Output")
+        
+        if not os.path.exists(output_path):
+            return {"name": "Output", "path": output_path, "type": "folder", "children": []}
+
+        def _scan_dir(path: str) -> List[Dict[str, Any]]:
+            children = []
+            try:
+                with os.scandir(path) as it:
+                    for entry in it:
+                        if entry.name.startswith('.'): continue # Skip hidden
+                        
+                        node = {
+                            "name": entry.name,
+                            "path": entry.path,
+                            "type": "folder" if entry.is_dir() else "file",
+                            "last_modified": entry.stat().st_mtime
+                        }
+                        if entry.is_dir():
+                            node["children"] = _scan_dir(entry.path)
+                        children.append(node)
+            except Exception as e:
+                print(f"Error scanning {path}: {e}")
+            return children
+
+        return {
+            "name": "Output",
+            "path": output_path,
+            "type": "folder",
+            "children": _scan_dir(output_path)
+        }
+
+    @classmethod
+    def read_file_content(cls, project_id: str, file_path: str) -> str:
+        """Reads the content of a specific file within the project's solution directory."""
+        # Security check: Ensure file is inside project dir
+        folder_name = "".join([c if c.isalnum() else "_" for c in project_id])
+        project_root = os.path.join(cls.BASE_DIR, folder_name)
+        
+        # Resolve absolute path
+        abs_path = os.path.abspath(file_path)
+        abs_root = os.path.abspath(project_root)
+        
+        if not abs_path.startswith(abs_root):
+            raise ValueError("Access Denied: File is outside project directory")
+            
+        with open(abs_path, 'r', encoding='utf-8') as f:
+            return f.read()
+
 class SupabasePersistence:
     def __init__(self):
         url = os.getenv("SUPABASE_URL")
         key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
         self.client: Client = create_client(url, key)
 
-    async def get_or_create_project(self, name: str) -> str:
+    async def get_or_create_project(self, name: str, repo_url: str = None) -> str:
         """Finds or creates a project by name and returns its UUID."""
         res = self.client.table("projects").select("id").eq("name", name).execute()
         if res.data:
-            return res.data[0]["id"]
+            project_id = res.data[0]["id"]
+            if repo_url:
+                self.client.table("projects").update({"repo_url": repo_url}).eq("id", project_id).execute()
+            return project_id
         
-        res = self.client.table("projects").insert({"name": name, "stage": "1"}).execute()
+        data = {"name": name, "stage": "1"}
+        if repo_url:
+            data["repo_url"] = repo_url
+            
+        res = self.client.table("projects").insert(data).execute()
         return res.data[0]["id"]
 
     async def list_projects(self) -> List[Dict[str, Any]]:
@@ -165,10 +227,15 @@ class SupabasePersistence:
             return res.data[0]["name"]
         return None
 
-    async def save_asset(self, project_id: str, filename: str, content: str, asset_type: str, file_hash: str) -> str:
+    async def get_project_metadata(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """Returns project metadata (name, repo_url, status)."""
+        res = self.client.table("projects").select("name, repo_url, status").eq("id", project_id).execute()
+        if res.data:
+            return res.data[0]
+        return None
+
+    async def save_asset(self, project_id: str, filename: str, content: str, asset_type: str, file_hash: str, source_path: str = None) -> str:
         """Saves an asset (e.g. .dtsx file) to the database."""
-        # Clean existing assets with same hash for same project to avoid duplicates if desired
-        # Or just insert new one.
         data = {
             "project_id": project_id,
             "filename": filename,
@@ -176,8 +243,71 @@ class SupabasePersistence:
             "type": asset_type,
             "hash": file_hash
         }
+        if source_path:
+            data["source_path"] = source_path
+            
         res = self.client.table("assets").insert(data).execute()
         return res.data[0]["id"]
+
+    async def update_asset_metadata(self, asset_id: str, updates: Dict[str, Any]) -> bool:
+        """Updates specific fields of an asset (type, selected, metadata)."""
+        allowed_fields = ["type", "selected", "metadata"]
+        safe_updates = {k: v for k, v in updates.items() if k in allowed_fields}
+        
+        if not safe_updates:
+            return False
+            
+        try:
+            self.client.table("assets").update(safe_updates).eq("id", asset_id).execute()
+            return True
+        except Exception as e:
+            print(f"Error updating asset {asset_id}: {e}")
+            return False
+
+    async def batch_save_assets(self, project_id: str, assets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Upserts multiple assets in a single call. Blocks if project is in DRAFTING mode."""
+        
+        # 1. State Check
+        # Check if project is in DRAFTING mode (Read-Only Inventory)
+        proj_res = self.client.table("projects").select("status").eq("id", project_id).execute()
+        if proj_res.data:
+            current_status = proj_res.data[0].get("status", "TRIAGE")
+            if current_status == "DRAFTING":
+                raise ValueError("Project is in DRAFTING mode. Asset Inventory is locked. Unlock Triege first.")
+
+        if not assets:
+            return []
+            
+        insert_data = []
+        for asset in assets:
+            insert_data.append({
+                "project_id": project_id,
+                "filename": asset["filename"],
+                "content": asset.get("content"),
+                "type": asset.get("type", "OTHER"),
+                "hash": asset.get("hash", "v1"),
+                "source_path": asset.get("source_path") or asset.get("path"),
+                "metadata": asset.get("metadata", {}),
+                "selected": asset.get("selected", False)
+            })
+            
+        # Supabase Python client upsert uses the on_conflict parameter or looks for PK.
+        # Since we have a unique constraint on (project_id, source_path), we can use it.
+        try:
+            res = self.client.table("assets").upsert(insert_data, on_conflict="project_id, source_path").execute()
+            return res.data # Return full asset objects with UUIDs
+        except Exception as e:
+            print(f"Error in batch_save_assets: {e}")
+            return []
+
+    async def get_project_assets(self, project_id: str) -> List[Dict[str, Any]]:
+        """Retrieves all assets for a given project from the database."""
+        try:
+            res = self.client.table("assets").select("*").eq("project_id", project_id).execute()
+            return res.data if res.data else []
+        except Exception as e:
+            print(f"Error fetching assets for {project_id}: {e}")
+            return []
 
     async def save_transformation(self, asset_id: str, source_code: str, target_code: str, status: str = "completed") -> str:
         """Saves a transformation record."""
@@ -263,4 +393,38 @@ class SupabasePersistence:
         except Exception as e:
             print(f"Error resetting project {project_id}: {e}")
             return False
+
+    async def update_project_status(self, project_id: str, status: str) -> bool:
+        """Updates the project status (TRIAGE <-> DRAFTING)."""
+        project_uuid = project_id
+        if "-" not in project_id:
+             resolved = await self.get_project_id_by_name(project_id)
+             if resolved:
+                 project_uuid = resolved
+
+        data = {"status": status}
+        if status == "DRAFTING":
+            data["triage_approved_at"] = "now()"
+        
+        try:
+            self.client.table("projects").update(data).eq("id", project_uuid).execute()
+            return True
+        except Exception as e:
+            print(f"Error updating status: {e}")
+            return False
+
+    async def get_project_status(self, project_id: str) -> str:
+         project_uuid = project_id
+         if "-" not in project_id:
+             resolved = await self.get_project_id_by_name(project_id)
+             if resolved:
+                 project_uuid = resolved
+
+         try:
+             res = self.client.table("projects").select("status").eq("id", project_uuid).execute()
+             if res.data:
+                 return res.data[0].get("status", "TRIAGE")
+         except:
+             pass
+         return "TRIAGE"
 
