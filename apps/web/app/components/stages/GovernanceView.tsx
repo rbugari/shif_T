@@ -22,13 +22,41 @@ interface GovernanceViewProps {
 }
 
 export default function GovernanceView({ projectId }: GovernanceViewProps) {
-    const [auditScore, setAuditScore] = useState(98);
-    const [stats, setStats] = useState({
-        totalFiles: 24,
-        totalLines: 4820,
-        complexitySaved: "High",
-        timeReduction: "85%"
-    });
+    const [report, setReport] = useState<any>(null);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        fetch(`${API_BASE_URL}/projects/${projectId}/governance`)
+            .then(res => res.json())
+            .then(data => {
+                setReport(data);
+                setLoading(false);
+            })
+            .catch(err => {
+                console.error("Failed to fetch governance report:", err);
+                setLoading(false);
+            });
+    }, [projectId]);
+
+    if (loading) {
+        return (
+            <div className="h-full flex items-center justify-center bg-gray-50/50 dark:bg-gray-950 text-gray-500">
+                <div className="flex flex-col items-center gap-4">
+                    <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                    <p className="font-bold animate-pulse">Generating Certification Report...</p>
+                </div>
+            </div>
+        );
+    }
+
+    const auditScore = report?.score ?? 0;
+    const stats = report?.stats ?? {
+        bronze_count: 0,
+        silver_count: 0,
+        gold_count: 0,
+        total_files: 0,
+        total_lines: 0
+    };
 
     return (
         <div className="h-full bg-gray-50/50 dark:bg-gray-950 overflow-y-auto p-8 custom-scrollbar">
@@ -47,7 +75,9 @@ export default function GovernanceView({ projectId }: GovernanceViewProps) {
                             </p>
                             <div className="flex items-center gap-4 pt-4">
                                 <a
-                                    href={`${API_BASE_URL}/solutions/${projectId}/export`}
+                                    href={`${API_BASE_URL}/projects/${projectId}/export`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
                                     className="px-6 py-3 bg-white text-blue-700 rounded-xl font-bold shadow-lg hover:bg-blue-50 transition-all flex items-center gap-2"
                                 >
                                     <Download size={18} /> Download Final Bundle
@@ -102,9 +132,9 @@ export default function GovernanceView({ projectId }: GovernanceViewProps) {
 
                         {/* Summary Metrics */}
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                            <StatCard label="Total Files" value={stats.totalFiles} icon={<ScrollText className="text-blue-500" />} />
-                            <StatCard label="Pyspark Lines" value={stats.totalLines} icon={<Code className="text-purple-500" />} />
-                            <StatCard label="Time Savings" value={stats.timeReduction} icon={<TrendingUp className="text-green-500" />} />
+                            <StatCard label="Total Refined" value={stats.total_files} icon={<ScrollText className="text-blue-500" />} />
+                            <StatCard label="Pyspark Lines" value={stats.total_lines} icon={<Code className="text-purple-500" />} />
+                            <StatCard label="Medallion Layers" value="3/3" icon={<Database className="text-green-500" />} />
                             <StatCard label="Idempotency" value="100%" icon={<ShieldCheck className="text-indigo-500" />} />
                         </div>
 
@@ -114,26 +144,20 @@ export default function GovernanceView({ projectId }: GovernanceViewProps) {
                                 <CheckCircle className="text-green-500" /> Compliance Audit Trail
                             </h3>
                             <div className="space-y-4">
-                                <LogItem
-                                    status="PASSED"
-                                    message="Idempotency Check: All Delta targets use MERGE logic."
-                                    time="2m ago"
-                                />
-                                <LogItem
-                                    status="PASSED"
-                                    message="Integrity Check: Unknown members (-1) handled in all lookups."
-                                    time="5m ago"
-                                />
-                                <LogItem
-                                    status="PASSED"
-                                    message="Architecture Check: Medallion layering enforcement."
-                                    time="8m ago"
-                                />
-                                <LogItem
-                                    status="INFO"
-                                    message="Security Scan: No hardcoded credentials detected in the codebase."
-                                    time="10m ago"
-                                />
+                                {report?.compliance_logs?.length > 0 ? (
+                                    report.compliance_logs.map((log: any, idx: number) => (
+                                        <LogItem
+                                            key={idx}
+                                            status={log.status}
+                                            message={log.message}
+                                            time={log.time}
+                                        />
+                                    ))
+                                ) : (
+                                    <div className="text-center py-4 text-gray-400 text-sm italic">
+                                        No certification logs found.
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -146,10 +170,10 @@ export default function GovernanceView({ projectId }: GovernanceViewProps) {
                                 <FileText size={20} className="text-gray-400" /> Deliverables
                             </h3>
                             <div className="space-y-3">
-                                <ArtifactLink label="Notebooks (.ipynb)" size="1.2 MB" />
-                                <ArtifactLink label="PySpark Scripts (.py)" size="450 KB" />
-                                <ArtifactLink label="Technical Specs (.md)" size="85 KB" />
-                                <ArtifactLink label="Lineage Map (.json)" size="12 KB" />
+                                <ArtifactLink label="Bronze Layer Scripts" size={`${stats.bronze_count} files`} />
+                                <ArtifactLink label="Silver Layer Scripts" size={`${stats.silver_count} files`} />
+                                <ArtifactLink label="Gold Layer Scripts" size={`${stats.gold_count} files`} />
+                                <ArtifactLink label="IaC & DevOp Manifests" size="2 files" />
                             </div>
 
                             <hr className="my-6 border-gray-100 dark:border-gray-800" />

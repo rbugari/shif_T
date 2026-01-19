@@ -1,0 +1,84 @@
+[Profiler] Starting analysis...
+[Profiler] Target Project Directory: C:\proyectos_dev\ShifT\solutions\base
+[Profiler] Found 7 Python files in Output.
+[Profiler] Analyzing file: DimCategory.py...
+[Profiler] Analyzing file: DimCustomers.py...
+[Profiler] Analyzing file: DimEmployee.py...
+[Profiler] Analyzing file: DimProduct.py...
+[Profiler] Analyzing file: DimShipper.py...
+[Profiler] Analyzing file: DimSupplier.py...
+[Profiler] Analyzing file: FactSales.py...
+[Profiler] Profile metadata saved to C:\proyectos_dev\ShifT\solutions\base\Refined\profile_metadata.json
+[Profiler] Complete. Analyzed 7 files.
+[Architect] Segmenting into Medallion Architecture (Bronze/Silver/Gold)...
+[Architect] Solutions Directory: C:\proyectos_dev\ShifT\solutions\base
+[Architect] Ensuring Medallion folder structure (Bronze/Silver/Gold)...
+[Architect] Generated: config.py
+[Architect] Generated: utils.py
+[Architect] Processing 7 source files for Medallion segmentation...
+[Architect] Transforming DimCategory.py -> Bronze & Silver layers
+[Architect] Transforming DimCustomers.py -> Bronze & Silver layers
+[Architect] Transforming DimEmployee.py -> Bronze & Silver layers
+[Architect] Transforming DimProduct.py -> Bronze & Silver layers
+[Architect] Transforming DimShipper.py -> Bronze & Silver layers
+[Architect] Transforming DimSupplier.py -> Bronze & Silver layers
+[Architect] Transforming FactSales.py -> Bronze & Silver layers
+[Architect] Medallion structure created.
+[Refactoring] Applying Spark Optimizations and Security Controls...
+[Refactoring] Scanning generated files for optimization candidates...
+[Refactoring] Optimizing BRONZE layer (7 files)...
+[Refactoring]   > DimCategory_bronze.py: Added Z-Order hint
+[Refactoring]   > DimCategory_bronze.py: Validated Secret Scope usage
+[Refactoring]   > DimCustomers_bronze.py: Added Z-Order hint
+[Refactoring]   > DimCustomers_bronze.py: Validated Secret Scope usage
+[Refactoring]   > DimEmployee_bronze.py: Added Z-Order hint
+[Refactoring]   > DimEmployee_bronze.py: Validated Secret Scope usage
+[Refactoring]   > DimProduct_bronze.py: Added Z-Order hint
+[Refactoring]   > DimProduct_bronze.py: Validated Secret Scope usage
+[Refactoring]   > DimShipper_bronze.py: Added Z-Order hint
+[Refactoring]   > DimShipper_bronze.py: Validated Secret Scope usage
+[Refactoring]   > DimSupplier_bronze.py: Added Z-Order hint
+[Refactoring]   > DimSupplier_bronze.py: Validated Secret Scope usage
+[Refactoring]   > FactSales_bronze.py: Added Z-Order hint
+[Refactoring]   > FactSales_bronze.py: Validated Secret Scope usage
+[Refactoring] Optimizing SILVER layer (7 files)...
+[Refactoring]   > DimCategory_silver.py: Added Z-Order hint
+[Refactoring]   > DimCategory_silver.py: Validated Secret Scope usage
+[Refactoring]   > DimCustomers_silver.py: Added Z-Order hint
+[Refactoring]   > DimCustomers_silver.py: Validated Secret Scope usage
+[Refactoring]   > DimEmployee_silver.py: Added Z-Order hint
+[Refactoring]   > DimEmployee_silver.py: Validated Secret Scope usage
+[Refactoring]   > DimProduct_silver.py: Added Z-Order hint
+[Refactoring]   > DimProduct_silver.py: Validated Secret Scope usage
+[Refactoring]   > DimShipper_silver.py: Added Z-Order hint
+[Refactoring]   > DimShipper_silver.py: Validated Secret Scope usage
+[Refactoring]   > DimSupplier_silver.py: Added Z-Order hint
+[Refactoring]   > DimSupplier_silver.py: Validated Secret Scope usage
+[Refactoring]   > FactSales_silver.py: Added Z-Order hint
+[Refactoring]   > FactSales_silver.py: Validated Secret Scope usage
+[Refactoring] Optimizing GOLD layer (7 files)...
+[Refactoring]   > DimCategory_gold.py: Added Z-Order hint
+[Refactoring]   > DimCategory_gold.py: Validated Secret Scope usage
+[Refactoring]   > DimCustomers_gold.py: Added Z-Order hint
+[Refactoring]   > DimCustomers_gold.py: Validated Secret Scope usage
+[Refactoring]   > DimEmployee_gold.py: Added Z-Order hint
+[Refactoring]   > DimEmployee_gold.py: Validated Secret Scope usage
+[Refactoring]   > DimProduct_gold.py: Added Z-Order hint
+[Refactoring]   > DimProduct_gold.py: Validated Secret Scope usage
+[Refactoring]   > DimShipper_gold.py: Added Z-Order hint
+[Refactoring]   > DimShipper_gold.py: Validated Secret Scope usage
+[Refactoring]   > DimSupplier_gold.py: Added Z-Order hint
+[Refactoring]   > DimSupplier_gold.py: Validated Secret Scope usage
+[Refactoring]   > FactSales_gold.py: Added Z-Order hint
+[Refactoring]   > FactSales_gold.py: Validated Secret Scope usage
+[Refactoring] Optimized 21 files.
+[OpsAuditor] Validating operational readiness and generating DevOps assets...
+[OpsAuditor] Starting Operational Audit...
+[OpsAuditor] OK: BRONZE layer contains 7 files.
+[OpsAuditor] OK: SILVER layer contains 7 files.
+[OpsAuditor] OK: GOLD layer contains 7 files.
+[OpsAuditor] Generating Infrastructure-as-Code (IaC) manifests...
+[OpsAuditor] Generating Operational Handbook (README_DEVOPS.md)...
+[OpsAuditor] Audit Complete.
+[OpsAuditor] Audit result: COMPLETED
+[Refinement] Pipeline Complete.

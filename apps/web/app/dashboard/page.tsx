@@ -2,6 +2,10 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import TranspilationView from "../components/stages/TranspilationView";
+import DraftingView from "../components/stages/DraftingView";
+import RefinementView from "../components/stages/RefinementView";
+import WorkflowToolbar from "../components/WorkflowToolbar";
 import { Upload, Github, FolderPlus, X, Trash2, RefreshCw } from "lucide-react";
 
 export default function Dashboard() {

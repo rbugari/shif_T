@@ -8,21 +8,19 @@ from delta.tables import *
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from pyspark.sql.window import Window
-import pyspark.sql.functions as F
 
 # 2. Reading Bronze / Source
-# -- Platform Rule: Use explicit JDBC connection for QUERY inputs
-# -- NOTE: Parameterized queries are not supported directly in Spark JDBC; you must substitute the parameter in the query.
-# For migration, assume parameter is 0 (i.e., all categories)
-
-# JDBC connection parameters (replace with widgets or secrets as appropriate)
+# -- JDBC connection details (parameterized, never hardcoded)
 db_url = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-url")
 db_user = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-user")
 db_password = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-password")
 
-# The query from SSIS (with parameter replaced by 0)
-sql_query = """
-SELECT categoryid, categoryname FROM Production.Categories WHERE categoryid > 0
+# -- Parameter for categoryid > ? (set via widget or parameter)
+categoryid_min = int(dbutils.widgets.get("categoryid_min"))
+
+sql_query = f"""
+    SELECT categoryid, categoryname FROM Production.Categories
+    WHERE categoryid > {categoryid_min}
 """
 
 df_source = (
@@ -40,6 +38,8 @@ df_source = (
 
 # 3.1 Surrogate Key Generation (STABLE & IDEMPOTENT)
 # SAFE MIGRATION PATTERN: Lookup existing keys, generate new ones only for new members.
+import pyspark.sql.functions as F
+
 target_table_name = "DimCategory"
 bk_cols = ["categoryid"]
 sk_col = "CategoryKey"
@@ -72,12 +72,12 @@ df_with_sk = df_existing.unionByName(df_new)
 def ensure_unknown_member(df):
     # Define the schema for the unknown member
     unknown_row = {
-        sk_col: -1,
+        "CategoryKey": -1,
         "categoryid": -1,
         "categoryname": "Unknown"
     }
     # Check if unknown member exists
-    if df.filter(col(sk_col) == -1).count() == 0:
+    if df.filter(col("CategoryKey") == -1).count() == 0:
         df_unknown = spark.createDataFrame([unknown_row], schema=df.schema)
         df = df.unionByName(df_unknown)
     return df
@@ -85,22 +85,15 @@ def ensure_unknown_member(df):
 df_with_sk = ensure_unknown_member(df_with_sk)
 
 # 4. Mandatory Type Casting (STRICT)
-# Target schema (STRICT): CategoryKey (INTEGER), categoryid (INTEGER), categoryname (STRING)
-df_final = df_with_sk
-cast_map = {
-    "CategoryKey": "integer",
-    "categoryid": "integer",
-    "categoryname": "string"
-}
-for col_name, target_type in cast_map.items():
-    if col_name in df_final.columns:
-        df_final = df_final.withColumn(col_name, col(col_name).cast(target_type))
+# Target schema (STRICT): CategoryKey: INTEGER, categoryid: INTEGER, categoryname: STRING
+df_final = df_with_sk \
+    .withColumn("CategoryKey", col("CategoryKey").cast("integer")) \
+    .withColumn("categoryid", col("categoryid").cast("integer")) \
+    .withColumn("categoryname", col("categoryname").cast("string"))
 
 # 5. Writing to Silver/Gold (Apply Platform Pattern)
-# Idempotent write: Overwrite the table (no SCD logic required for static dimension load)
-df_final = df_final.select("CategoryKey", "categoryid", "categoryname")
+# Idempotent overwrite (no SCD2 needed for static dimension)
 df_final.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table_name)
 
-# 6. Optimization (Platform Rule)
-# Z-ORDER on business key
+# 6. Optimization (Z-ORDER on business key)
 spark.sql(f"OPTIMIZE {target_table_name} ZORDER BY (categoryid)")

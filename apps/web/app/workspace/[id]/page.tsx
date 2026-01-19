@@ -6,6 +6,7 @@ import CodeDiffViewer from "../../components/CodeDiffViewer";
 import TriageView from "../../components/stages/TriageView";
 import DraftingView from "../../components/stages/DraftingView";
 import GovernanceView from "../../components/stages/GovernanceView";
+import RefinementView from "../../components/stages/RefinementView";
 import WorkflowToolbar from "../../components/WorkflowToolbar";
 
 import { useParams } from "next/navigation";
@@ -255,93 +256,27 @@ export default function WorkspacePage() {
 
                         {stage === 2 && (
                             <DraftingView
-                                projectId={id}
+                                projectId={id || ""}
                                 onStageChange={setStage}
-                                onCompletion={(c: boolean) => setIsStageComplete(c)}
+                                onCompletion={(completed) => setIsStageComplete(completed)}
                             />
                         )}
-
                         {stage === 3 && (
-                            <div className="h-full w-full flex flex-col bg-gray-50 dark:bg-gray-950">
-                                <div className="px-6 py-4 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center shadow-sm">
-                                    <div className="flex flex-col">
-                                        <h2 className="font-bold text-lg flex items-center gap-2">
-                                            <Code className="text-primary" size={20} />
-                                            Refinement: {selectedNode?.data?.label || "Architectural Review"}
-                                        </h2>
-                                        <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Comparing Legacy Logic vs Cloud Native Target</p>
-                                    </div>
-                                    <div className="flex items-center gap-3">
-                                        <div className="flex -space-x-2">
-                                            <div className="w-8 h-8 rounded-full border-2 border-white dark:border-gray-900 bg-blue-500 flex items-center justify-center text-[10px] font-bold text-white shadow-sm" title="Agent C">C</div>
-                                            <div className="w-8 h-8 rounded-full border-2 border-white dark:border-gray-900 bg-purple-500 flex items-center justify-center text-[10px] font-bold text-white shadow-sm" title="Agent F">F</div>
-                                        </div>
-                                        <button className="bg-primary text-white px-4 py-1.5 rounded-lg text-xs font-bold shadow-md hover:bg-secondary transition-all flex items-center gap-2">
-                                            Apply Optimizations <ArrowRight size={14} />
-                                        </button>
-                                    </div>
-                                </div>
-                                <div className="flex-1 relative m-4 rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800 shadow-xl bg-white dark:bg-gray-900">
-                                    <CodeDiffViewer
-                                        originalCode={originalCode}
-                                        modifiedCode={optimizedCode}
-                                    />
-                                    {isTranspiling && (
-                                        <div className="absolute inset-0 bg-white/60 dark:bg-black/60 flex items-center justify-center z-10 backdrop-blur-md">
-                                            <div className="flex flex-col items-center gap-4">
-                                                <div className="relative">
-                                                    <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-primary"></div>
-                                                    <div className="absolute inset-0 flex items-center justify-center">
-                                                        <Activity size={24} className="text-primary animate-pulse" />
-                                                    </div>
-                                                </div>
-                                                <div className="text-sm font-bold bg-white dark:bg-gray-800 px-6 py-3 rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-700 flex flex-col items-center gap-1">
-                                                    <span>Architecting PySpark...</span>
-                                                    <span className="text-[10px] text-gray-400 font-normal">Applying Medallion Standards</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                                <div className="h-64 mx-4 mb-4 bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-md p-6 overflow-hidden flex flex-col">
-                                    <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                                        <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
-                                        Compliance Insights & Suggestions
-                                    </h3>
-                                    <div className="flex-1 overflow-y-auto custom-scrollbar pr-2">
-                                        {suggestions.length === 0 ? (
-                                            <div className="h-full flex flex-col items-center justify-center text-center opacity-50 grayscale scale-90">
-                                                <FileText size={48} className="text-gray-200 mb-2" />
-                                                <p className="text-xs text-gray-400 italic">Select a component to trigger architectural audit.</p>
-                                            </div>
-                                        ) : (
-                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                {suggestions.map((sug, idx) => (
-                                                    <div key={idx} className="flex items-start gap-3 p-4 bg-orange-50/50 dark:bg-orange-900/10 rounded-xl border border-orange-100 dark:border-orange-900/30 group hover:border-orange-300 transition-all">
-                                                        <div className="mt-0.5">
-                                                            <input type="checkbox" className="w-4 h-4 rounded text-orange-600 focus:ring-orange-500 border-orange-200" defaultChecked />
-                                                        </div>
-                                                        <div className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed font-medium">
-                                                            {sug}
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
+                            <RefinementView
+                                projectId={id || ""}
+                                onStageChange={setStage}
+                            />
                         )}
 
 
                         {stage === 4 && (
-                            <GovernanceView projectId={id} />
+                            <GovernanceView projectId={id || ""} />
                         )}
 
-                    </div>
-                </main>
-            </div>
-        </ReactFlowProvider>
+                    </div >
+                </main >
+            </div >
+        </ReactFlowProvider >
     );
 }
 

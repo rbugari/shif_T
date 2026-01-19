@@ -10,59 +10,47 @@ from pyspark.sql.types import *
 from pyspark.sql.window import Window
 
 # 2. Reading Bronze / Source
-# NOTE: The input is a parameterized query. In Databricks, you must provide the parameter value via a widget or notebook parameter.
-# For demonstration, we'll use a widget for 'min_shipperid'.
-dbutils.widgets.text('min_shipperid', '0')
-min_shipperid = dbutils.widgets.get('min_shipperid')
+# -- Platform Rule: Use explicit JDBC connection for QUERY inputs
+# -- NOTE: Replace <jdbc_url>, <username_key>, <password_key> with actual secret scope/keys
 
-# JDBC connection setup (replace with your actual connection info and secret scope/key names)
 db_url = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-url")
 db_user = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-user")
 db_password = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-password")
 
-# Compose the parameterized query
-sql_query = f"""
-    SELECT * FROM Sales.Shippers
-    WHERE shipperid > {min_shipperid}
-"""
-
-# Read source data via JDBC
-source_df = (
-    spark.read.format("jdbc")
-    .option("url", db_url)
-    .option("user", db_user)
-    .option("password", db_password)
-    .option("dbtable", f"({sql_query}) as src")
-    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
+# The parameter for shipperid > ? is assumed to be 0 for full load (adjust as needed)
+source_query = "SELECT * FROM Sales.Shippers WHERE shipperid > 0"
+df_source = spark.read.format("jdbc") \
+    .option("url", db_url) \
+    .option("dbtable", f"({source_query}) as src") \
+    .option("user", db_user) \
+    .option("password", db_password) \
+    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver") \
     .load()
-)
 
 # 3. Transformations (Apply Logic)
 # No lookups or additional transformations specified.
-df_staged = source_df
 
 # 3.1 Surrogate Key Generation (STABLE & IDEMPOTENT)
 # SAFE MIGRATION PATTERN: Lookup existing keys, generate new ones only for new members.
-# For DimShipper, assume business key is 'shipperid', surrogate key is 'ShipperKey'.
-target_table_name = "DimShipper"
-bk_cols = ["shipperid"]
-sk_col = "ShipperKey"
-
 import pyspark.sql.functions as F
+
+target_table_name = "DimShipper"
+bk_cols = ["shipperid"]  # Assuming shipperid is the business key
+sk_col = "ShipperKey"    # Surrogate key for dimension
 
 # 1. Get Existing Keys (Handle if table doesn't exist yet)
 try:
     df_target = spark.read.table(target_table_name).select(*bk_cols, sk_col)
     max_sk = df_target.agg(F.max(F.col(sk_col))).collect()[0][0] or 0
-except:
+except Exception:
     df_target = None
     max_sk = 0
 
 # 2. Join Source with Target to find existing SKs
 if df_target is not None:
-    df_joined = df_staged.join(df_target, on=bk_cols, how="left")
+    df_joined = df_source.join(df_target, on=bk_cols, how="left")
 else:
-    df_joined = df_staged.withColumn(sk_col, F.lit(None).cast("integer"))
+    df_joined = df_source.withColumn(sk_col, F.lit(None).cast("integer"))
 
 # 3. Generate Keys for New Rows ONLY
 window_spec = Window.orderBy(*bk_cols)
@@ -80,10 +68,10 @@ def ensure_unknown_member(df):
     unknown_row = {
         "ShipperKey": -1,
         "shipperid": -1,
-        "CompanyName": "Unknown",
-        "Phone": None
+        "companyname": "Unknown",
+        "phone": None
     }
-    # Check if -1 exists
+    # Check if unknown member exists
     if df.filter(col("ShipperKey") == -1).count() == 0:
         unknown_df = spark.createDataFrame([unknown_row], schema=df.schema)
         df = df.unionByName(unknown_df)
@@ -92,12 +80,18 @@ def ensure_unknown_member(df):
 df_with_sk = ensure_unknown_member(df_with_sk)
 
 # 4. Mandatory Type Casting (STRICT)
-# Define the target schema explicitly (as per best practice, since schema is not provided)
+# -- Target schema is not provided, so we infer from source and platform rules
+# -- For demonstration, we assume the following schema:
+#   ShipperKey: INTEGER (Surrogate Key)
+#   shipperid: INTEGER
+#   companyname: STRING
+#   phone: STRING
+
 target_schema = [
     {"name": "ShipperKey", "type": "INTEGER"},
     {"name": "shipperid", "type": "INTEGER"},
-    {"name": "CompanyName", "type": "STRING"},
-    {"name": "Phone", "type": "STRING"}
+    {"name": "companyname", "type": "STRING"},
+    {"name": "phone", "type": "STRING"}
 ]
 
 for field in target_schema:
@@ -107,8 +101,8 @@ for field in target_schema:
         df_with_sk = df_with_sk.withColumn(col_name, col(col_name).cast(target_type))
 
 # 5. Writing to Silver/Gold (Apply Platform Pattern)
-# Overwrite the DimShipper table (idempotent for dimensions)
+# -- Idempotent overwrite (no SCD logic required for static dimension)
 df_with_sk.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table_name)
 
-# Optional: Z-ORDER on business key for optimization
+# 6. Optimization (Z-ORDER on business key)
 spark.sql(f"OPTIMIZE {target_table_name} ZORDER BY (shipperid)")

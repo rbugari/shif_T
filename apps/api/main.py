@@ -1,8 +1,10 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
+import shutil
 from typing import Dict, Any, List, Optional
 from services.ssis_parser import SSISParser
 from services.agent_a_service import AgentAService
@@ -12,6 +14,7 @@ from services.agent_f_service import AgentFService
 from services.agent_g_service import AgentGService
 from services.persistence_service import PersistenceService, SupabasePersistence
 from services.discovery_service import DiscoveryService
+from services.refinement.governance_service import GovernanceService
 from supabase import create_client, Client
 
 load_dotenv()
@@ -591,6 +594,7 @@ from services.migration_orchestrator import MigrationOrchestrator
 @app.post("/transpile/orchestrate")
 async def trigger_orchestration(payload: Dict[str, Any]):
     """Triggers the full Migration Orchestrator (Agents C -> F -> G)."""
+    print(f"DEBUG: Entering trigger_orchestration with payload: {payload}")
     project_id = payload.get("project_id")
     limit = payload.get("limit", 0)
     
@@ -601,11 +605,16 @@ async def trigger_orchestration(payload: Dict[str, Any]):
     db = SupabasePersistence()
     project_name = project_id
     if "-" in project_id:
+        print(f"DEBUG: Resolving project name for ID: {project_id}")
         n = await db.get_project_name_by_id(project_id)
+        print(f"DEBUG: Resolved project name: {n}")
         if n: project_name = n
 
+    print(f"DEBUG: Instantiating MigrationOrchestrator for {project_name}")
     orchestrator = MigrationOrchestrator(project_name)
+    print("DEBUG: Running full migration...")
     result = await orchestrator.run_full_migration(limit=limit)
+    print("DEBUG: Migration complete.")
     return result
 
 @app.post("/projects/{project_id}/reset")
@@ -664,6 +673,64 @@ async def get_project_logs(project_id: str):
     except Exception as e:
         return {"logs": f"Error reading logs: {e}"}
 
+# --- Phase 3: Refinement Endpoints ---
+from services.refinement.refinement_orchestrator import RefinementOrchestrator
+
+@app.post("/refine/start")
+async def start_refinement(payload: dict):
+    """Triggers the Refinement Phase (Profiler -> Architect -> Refactor -> Ops)."""
+    project_id = payload.get("project_id")
+    if not project_id:
+        return {"error": "Project ID required"}
+    
+    # Resolve Project Name for File System Access
+    db = SupabasePersistence()
+    project_name = project_id
+    if "-" in project_id:
+        n = await db.get_project_name_by_id(project_id)
+        if n: project_name = n
+
+    # In a real async system, this would be a background task. 
+    # For MVP, we run synchronously to show immediate results.
+    orchestrator = RefinementOrchestrator()
+    result = orchestrator.start_pipeline(project_name)
+    return result
+
+
+@app.get("/projects/{project_id}/refinement/state")
+async def get_refinement_state(project_id: str):
+    """Returns the persisted state of Phase 3 (logs and profile)."""
+    db = SupabasePersistence()
+    project_name = project_id
+    if "-" in project_id:
+        n = await db.get_project_name_by_id(project_id)
+        if n: project_name = n
+
+    state = {
+        "log": [],
+        "profile": None
+    }
+
+    try:
+        # 1. Fetch Logs
+        log_content = PersistenceService.read_file_content(project_name, "refinement.log")
+        if log_content:
+            state["log"] = log_content.split("\n")
+    except:
+        pass
+
+    try:
+        # 2. Fetch Profile Metadata
+        profile_content = PersistenceService.read_file_content(project_name, "Refined/profile_metadata.json")
+        if profile_content:
+            import json
+            state["profile"] = json.loads(profile_content)
+    except:
+        pass
+
+    return state
+
+
 @app.get("/projects/{project_id}/status")
 async def get_project_status(project_id: str):
     """Returns the current governance status."""
@@ -676,6 +743,46 @@ async def get_project_status(project_id: str):
         
     status = await db.get_project_status(project_uuid)
     return {"status": status}
+
+
+@app.get("/projects/{project_id}/governance")
+async def get_governance(project_id: str):
+    """Returns the certification report and lineage for the project."""
+    db = SupabasePersistence()
+    project_name = project_id
+    if "-" in project_id:
+        n = await db.get_project_name_by_id(project_id)
+        if n: project_name = n
+
+    service = GovernanceService()
+    try:
+        report = service.get_certification_report(project_name)
+        return report
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/projects/{project_id}/export")
+async def export_project(project_id: str):
+    """Streams the project solution as a ZIP bundle."""
+    db = SupabasePersistence()
+    project_name = project_id
+    if "-" in project_id:
+        n = await db.get_project_name_by_id(project_id)
+        if n: project_name = n
+
+    service = GovernanceService()
+    try:
+        zip_buffer = service.create_export_bundle(project_name)
+        filename = f"ShiftT_Solution_{project_name}.zip"
+        
+        return StreamingResponse(
+            zip_buffer,
+            media_type="application/x-zip-compressed",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

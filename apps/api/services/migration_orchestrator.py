@@ -55,7 +55,6 @@ class MigrationOrchestrator:
 
     def _log_persistence(self, message: str):
         """Appends a message to the persistent log file."""
-        timestamp = os.popen('date -u +"%Y-%m-%dT%H:%M:%SZ"').read().strip() # Simple timestamp fallback or use datetime
         import datetime
         now = datetime.datetime.utcnow().isoformat()
         

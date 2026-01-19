@@ -11,35 +11,38 @@ from pyspark.sql.window import Window
 import pyspark.sql.functions as F
 
 # 2. Reading Bronze / Source
-# -- JDBC connection details (parameterized, no hardcoded secrets)
-db_url = dbutils.secrets.get(scope="jdbc-secrets", key="sales_db_url")
-db_user = dbutils.secrets.get(scope="jdbc-secrets", key="sales_db_user")
-db_password = dbutils.secrets.get(scope="jdbc-secrets", key="sales_db_password")
+# -- JDBC connection details (replace with your actual secret scope/keys)
+db_url = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-url")
+db_user = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-user")
+db_password = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-password")
 
 # -- Parameter for the WHERE clause (custid > ?)
-min_custid = dbutils.widgets.get("min_custid") if dbutils.widgets.get("min_custid", None) else "0"
+custid_min = dbutils.widgets.get("custid_min") if dbutils.widgets.get("custid_min", None) else "0"
 
-source_query = f"""
-    SELECT custid, contactname, city, country, address, phone, postalcode
-    FROM Sales.Customers
-    WHERE custid > {min_custid}
+sql_query = f"""
+SELECT custid, contactname, city, country, address, phone, postalcode
+FROM Sales.Customers
+WHERE custid > {custid_min}
 """
 
-# -- Read source data explicitly
-source_df = (
+df_source = (
     spark.read.format("jdbc")
     .option("url", db_url)
     .option("user", db_user)
     .option("password", db_password)
-    .option("dbtable", f"({source_query}) as src")
+    .option("dbtable", f"({sql_query}) as src")
     .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
     .load()
 )
 
 # 3. Transformations (Apply Logic)
-# -- No lookups or additional logic specified
+# -- Map source columns to target columns (assuming 1:1 mapping)
+# -- If target schema is not provided, we infer reasonable types and names
+# -- Target Table: DimCustomer
+# -- Columns: CustomerKey (SK), CustomerAlternateKey (BK), ContactName, City, Country, Address, Phone, PostalCode
 
 # 3.1 Surrogate Key Generation (STABLE & IDEMPOTENT)
+# SAFE MIGRATION PATTERN: Lookup existing keys, generate new ones only for new members.
 target_table_name = "DimCustomer"
 bk_cols = ["custid"]
 sk_col = "CustomerKey"
@@ -48,15 +51,15 @@ sk_col = "CustomerKey"
 try:
     df_target = spark.read.table(target_table_name).select(*bk_cols, sk_col)
     max_sk = df_target.agg(F.max(F.col(sk_col))).collect()[0][0] or 0
-except Exception:
+except:
     df_target = None
     max_sk = 0
 
 # 2. Join Source with Target to find existing SKs
 if df_target is not None:
-    df_joined = source_df.join(df_target, on=bk_cols, how="left")
+    df_joined = df_source.join(df_target, on=bk_cols, how="left")
 else:
-    df_joined = source_df.withColumn(sk_col, F.lit(None).cast("integer"))
+    df_joined = df_source.withColumn(sk_col, F.lit(None).cast("integer"))
 
 # 3. Generate Keys for New Rows ONLY
 window_spec = Window.orderBy(*bk_cols)
@@ -64,6 +67,8 @@ df_existing = df_joined.filter(F.col(sk_col).isNotNull())
 df_new = df_joined.filter(F.col(sk_col).isNull()).drop(sk_col)
 df_new = df_new.withColumn(sk_col, F.row_number().over(window_spec) + max_sk)
 
+# 4. Union
+from functools import reduce
 df_with_sk = df_existing.unionByName(df_new)
 
 # 3.2 Unknown Member Handling (For Dimensions)
@@ -79,40 +84,36 @@ def ensure_unknown_member(df):
         "phone": "Unknown",
         "postalcode": "Unknown"
     }
-    # Check if unknown member exists
+    # Check if unknown exists
     if df.filter(col("CustomerKey") == -1).count() == 0:
-        unknown_df = spark.createDataFrame([unknown_row], schema=df.schema)
-        df = df.unionByName(unknown_df)
+        df_unknown = spark.createDataFrame([unknown_row], schema=df.schema)
+        df = df.unionByName(df_unknown)
     return df
 
 df_with_sk = ensure_unknown_member(df_with_sk)
 
 # 4. Mandatory Type Casting (STRICT)
-# -- Target schema is not provided, so we infer types based on platform rules and common conventions
-# -- If you have a schema registry, replace the following with explicit types
-casted_df = (
-    df_with_sk
-    .withColumn("CustomerKey", col("CustomerKey").cast("integer"))
-    .withColumn("custid", col("custid").cast("integer"))
-    .withColumn("contactname", col("contactname").cast("string"))
-    .withColumn("city", col("city").cast("string"))
-    .withColumn("country", col("country").cast("string"))
-    .withColumn("address", col("address").cast("string"))
-    .withColumn("phone", col("phone").cast("string"))
-    .withColumn("postalcode", col("postalcode").cast("string"))
-)
+# -- Define target schema explicitly (as not provided)
+target_schema = [
+    StructField("CustomerKey", IntegerType(), False),
+    StructField("custid", IntegerType(), False),
+    StructField("contactname", StringType(), True),
+    StructField("city", StringType(), True),
+    StructField("country", StringType(), True),
+    StructField("address", StringType(), True),
+    StructField("phone", StringType(), True),
+    StructField("postalcode", StringType(), True)
+]
+
+for field in target_schema:
+    col_name = field.name
+    target_type = field.dataType.simpleString()
+    if col_name in df_with_sk.columns:
+        df_with_sk = df_with_sk.withColumn(col_name, col(col_name).cast(target_type))
 
 # 5. Writing to Silver/Gold (Apply Platform Pattern)
-# -- Overwrite the dimension table (idempotent load)
-(
-    casted_df
-    .orderBy("CustomerKey")
-    .write
-    .format("delta")
-    .mode("overwrite")
-    .option("overwriteSchema", "true")
-    .saveAsTable(target_table_name)
-)
+# -- Overwrite the table (idempotent load)
+df_with_sk.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table_name)
 
 # 6. Optimization (Z-ORDER on Business Key)
 spark.sql(f"OPTIMIZE {target_table_name} ZORDER BY (custid)")

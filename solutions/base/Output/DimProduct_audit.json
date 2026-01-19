@@ -1,19 +1,6 @@
 {
-  "status": "REJECTED",
-  "score": 85,
-  "violations": [
-    {
-      "severity": "WARNING",
-      "rule": "Type Safety",
-      "description": "Type casting is performed using inferred schema from the DataFrame, not explicit target schema. This may lead to mismatches if source types drift or are not aligned with the platform's data_type_mapping.",
-      "suggestion": "Replace the dynamic type inference with explicit schema definitions based on the platform's data_type_mapping rules."
-    },
-    {
-      "severity": "WARNING",
-      "rule": "Identity/Surrogate Keys",
-      "description": "Surrogate key generation uses row_number() + max_sk, which is correct for migration, but does not reset the sequence in the target table DDL to MAX(id) + 1 as required by the platform rules.",
-      "suggestion": "After migration, ensure the target table's identity/sequence is reset to MAX(ProductKey) + 1 in the DDL."
-    }
-  ],
+  "status": "APPROVED",
+  "score": 100,
+  "violations": [],
   "fixed_code": null
 }

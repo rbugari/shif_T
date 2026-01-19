@@ -123,42 +123,44 @@ class PersistenceService:
             return False
 
     @classmethod
-    def get_project_files(cls, project_id: str) -> Dict[str, Any]:
-        """Returns a recursive query of the project's Output directory."""
+    def get_project_files(cls, project_id: str) -> List[Dict[str, Any]]:
+        """Returns a recursive query of the project's solution directory."""
         # Clean ID just in case
         folder_name = "".join([c if c.isalnum() else "_" for c in project_id])
         solution_path = os.path.join(cls.BASE_DIR, folder_name)
-        output_path = os.path.join(solution_path, "Output")
         
-        if not os.path.exists(output_path):
-            return {"name": "Output", "path": output_path, "type": "folder", "children": []}
+        if not os.path.exists(solution_path):
+            return []
 
         def _scan_dir(path: str) -> List[Dict[str, Any]]:
             children = []
             try:
                 with os.scandir(path) as it:
                     for entry in it:
-                        if entry.name.startswith('.'): continue # Skip hidden
+                        # Skip hidden files and common junk
+                        if entry.name.startswith('.'): continue
+                        if entry.name == "__pycache__": continue
                         
                         node = {
                             "name": entry.name,
-                            "path": entry.path,
-                            "type": "folder" if entry.is_dir() else "file",
+                            "path": entry.path, # Absolute path, maybe dangerous to expose but needed for read
+                            "type": "directory" if entry.is_dir() else "file",
                             "last_modified": entry.stat().st_mtime
                         }
                         if entry.is_dir():
                             node["children"] = _scan_dir(entry.path)
+                            # Sort: folders first, then files
+                            node["children"].sort(key=lambda x: (x["type"] != "directory", x["name"]))
+                            
                         children.append(node)
             except Exception as e:
                 print(f"Error scanning {path}: {e}")
+                
+            # Sort: folders first, then files
+            children.sort(key=lambda x: (x["type"] != "directory", x["name"]))
             return children
 
-        return {
-            "name": "Output",
-            "path": output_path,
-            "type": "folder",
-            "children": _scan_dir(output_path)
-        }
+        return _scan_dir(solution_path)
 
     @classmethod
     def read_file_content(cls, project_id: str, file_path: str) -> str:
@@ -230,8 +232,8 @@ class SupabasePersistence:
         return None
 
     async def get_project_metadata(self, project_id: str) -> Optional[Dict[str, Any]]:
-        """Returns project metadata (name, repo_url, status)."""
-        res = self.client.table("projects").select("name, repo_url, status").eq("id", project_id).execute()
+        """Returns project metadata (name, repo_url, status, stage)."""
+        res = self.client.table("projects").select("name, repo_url, status, stage").eq("id", project_id).execute()
         if res.data:
             return res.data[0]
         return None
