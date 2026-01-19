@@ -71,8 +71,11 @@ Implementación de lógica para **Surrogate Keys** secuenciales, asegurando inte
 
 1.  **Aprobar Triage:** Al finalizar la Fase 1, bloqueas el alcance (`Lock Scope`).
 2.  **Ejecutar Pipeline:** Desde el Dashboard, inicias la migración (`Execute Pipeline`).
-3.  **Monitoreo:** Observas el progreso en tiempo real.
-4.  **Descarga:** Al finalizar, obtienes una solución completa organizada en carpetas, lista para desplegar en tu Workspace de Databricks.
+3.  **Monitoreo y Persistencia:**
+    *   **Live Logs:** Observas el progreso en tiempo real en la consola.
+    *   **Log Persistence:** Si recargas la página, el sistema recupera automáticamente el historial de ejecución (`GET /logs`), restaurando el estado de progreso al 100% si la migración terminó exitosamente.
+4.  **Aprobar:** Una vez completado, el botón "Approve & Refine" se habilita, permitiendo avanzar a la Fase 3 con un solo clic.
+5.  **Descarga:** Obtienes una solución completa organizada en carpetas.
 
 
 ## 🔮 Roadmap to Excellence: Qué falta para el "Gold Standard"
