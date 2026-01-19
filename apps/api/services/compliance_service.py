@@ -31,6 +31,7 @@ class ComplianceService:
         with open(self.prompt_path, "r", encoding="utf-8") as f:
             return f.read()
 
+    @logger.llm_debug("Compliance-Auditor")
     async def audit_code(self, notebook_content: str, platform_spec: Dict[str, Any]) -> Dict[str, Any]:
         """
         Audits the provided PySpark code.

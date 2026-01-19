@@ -10,6 +10,14 @@ except ImportError:
     except ImportError:
         from ..utils.logger import logger
 
+try:
+    from apps.api.services.persistence_service import PersistenceService
+except ImportError:
+    try:
+        from services.persistence_service import PersistenceService
+    except ImportError:
+        from .persistence_service import PersistenceService
+
 class TopologyService:
     """
     The Topology Architect: Orchestration Agent.
@@ -18,7 +26,7 @@ class TopologyService:
 
     def __init__(self, project_id: str):
         self.project_id = project_id
-        self.base_path = os.path.join(os.getcwd(), "solutions", project_id)
+        self.base_path = PersistenceService.ensure_solution_dir(project_id)
         self.output_path = os.path.join(self.base_path, "Output")
 
     def build_orchestration_plan(self) -> Dict[str, Any]:
@@ -54,17 +62,17 @@ class TopologyService:
                 lookups = []
                 
                 for comp in data_flow:
-                    table_ref = comp["properties"].get("OpenRowset") or comp["properties"].get("TableOrViewName")
-                    sql_command = comp["properties"].get("SqlCommand")
+                    table_ref = comp["logic"].get("OpenRowset") or comp["logic"].get("TableOrViewName")
+                    sql_command = comp["logic"].get("SqlCommand")
                     
                     if not table_ref and sql_command:
                         table_ref = f"QUERY: {sql_command}" # Embed query for now, or use a struct
                         
-                    if comp["type"] == "SOURCE":
+                    if comp["intent"] == "SOURCE":
                         if table_ref: inputs.append(table_ref)
-                    elif comp["type"] == "DESTINATION":
+                    elif comp["intent"] == "DESTINATION":
                         if table_ref: outputs.append(table_ref)
-                    elif comp["type"] == "LOOKUP":
+                    elif comp["intent"] == "LOOKUP":
                         if table_ref: lookups.append(table_ref)
 
                 package_metadatas.append({

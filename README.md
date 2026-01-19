@@ -22,6 +22,9 @@ We have recently enhanced the Discovery phase to provide a premium architecture 
 -   **Smart Triage:** Intelligent classification (CORE, SUPPORT, IGNORED) and dependency inference.
 -   **Project Reset:** Ability to purge discovery data and restart the analysis from scratch.
 -   **Editable Grid:** Mass-edit categories and sync changes instantly with the visual graph.
+-   **Migration Persistence:** Real-time log persistence to view historical execution results (Log Replay).
+-   **Workflow Toolbar:** Seamless stage transitions with "Approve & Refine" actions.
+-   **Enhanced Dashboard:** Project cards with clear stage indicators, origin types, and asset counts.
 
 ## 📋 Prerequisites
 -   Python 3.11+

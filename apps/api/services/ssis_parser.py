@@ -61,56 +61,68 @@ class SSISParser:
     def get_hash(content: str) -> str:
         return hashlib.sha256(content.encode()).hexdigest()
 
+    def get_logical_medulla(self) -> Dict[str, Any]:
+        """
+        Returns the 'spinal cord' of the ETL process, stripped of all XML/Layout noise.
+        This is the primary input for the high-quality Architect Agent.
+        """
+        return {
+            "summary": self.get_summary(),
+            "data_flow_logic": self.get_data_flow_components(),
+            "control_flow_topology": self.extract_executables(),
+            "constraints": self.extract_precedence_constraints()
+        }
+
     def get_data_flow_components(self) -> List[Dict[str, Any]]:
         """
-        Extracts components from Data Flow Tasks (Pipeline).
-        Crucial for identifying Lookups and Sources vs Destinations.
+        Surgically extracts components from Data Flow Tasks.
+        Focuses on Intent (Source/Lookup/Dest) and Logic (SQL/Mappings).
         """
         components = []
-        # Data Flow namespace usually differs or is inline types, but 'component' tag is standard in pipeline
-        # Note: namespace parsing in pipeline XML can be tricky as it's often CDATA or nested.
-        # We'll look for the 'component' tag regardless of namespace for robustness in this pass.
-        
-        # Searching deeply for components
-        # In a real .dtsx, Pipeline XML is often inside a wrapper. 
-        # For this logic, we search for 'component' elements locally or via generic xpath.
-        
-        # NOTE: SSIS 2012+ uses 'component' tags with 'contactInfo' that reveals type.
         for comp in self.tree.xpath('//*[local-name()="component"]'):
             ref_id = comp.get('refId') 
             name = comp.get('name')
             contact_info = comp.get('contactInfo') or ""
             
+            # Identify Component Intent
             comp_type = "UNKNOWN"
-            if "Lookup" in contact_info or "Lookup" in name:
+            if any(x in contact_info or x in name for x in ["Lookup", "Búsqueda"]):
                 comp_type = "LOOKUP"
-            elif "Source" in contact_info or "Source" in name:
+            elif any(x in contact_info or x in name for x in ["Source", "Origen"]):
                 comp_type = "SOURCE"
-            elif "Destination" in contact_info or "Destination" in name:
+            elif any(x in contact_info or x in name for x in ["Destination", "Destino"]):
                 comp_type = "DESTINATION"
+            elif "Derived column" in contact_info.lower():
+                comp_type = "TRANSFORMATION_DERIVED"
             
-            # Extract connections (which table/file is it touching?)
-            connections = []
-            for conn in comp.xpath('.//*[local-name()="connection"]'):
-                 connections.append({
-                     "connection_manager_id": conn.get('connectionManagerID'),
-                     "name": conn.get('name')
-                 })
-                 
-            # Extract properties (like SqlCommand or TableName)
-            properties = {}
+            # Extract SQL / Table Logic (The 'Spine')
+            logic = {}
             for prop in comp.xpath('.//*[local-name()="property"]'):
-                prop_name = prop.get('name')
-                prop_val = prop.text
-                if prop_name in ["OpenRowset", "SqlCommand", "TableOrViewName"]:
-                    properties[prop_name] = prop_val
+                p_name = prop.get('name')
+                if p_name in ["SqlCommand", "OpenRowset", "TableOrViewName", "SqlStatementSource"]:
+                    logic[p_name] = prop.text.strip() if prop.text else ""
+
+            # Extract Column Mappings (The 'Nerves')
+            mappings = []
+            for input_col in comp.xpath('.//*[local-name()="inputColumn"]'):
+                mappings.append({
+                    "source": input_col.get("externalMetadataColumnId"),
+                    "target": input_col.get("name"),
+                    "usage": "INPUT"
+                })
+            for output_col in comp.xpath('.//*[local-name()="outputColumn"]'):
+                 mappings.append({
+                    "name": output_col.get("name"),
+                    "usage": "OUTPUT"
+                })
 
             components.append({
-                "ref_id": ref_id,
+                "intent": comp_type,
                 "name": name,
-                "type": comp_type,
-                "connections": connections,
-                "properties": properties
+                "logic": logic,
+                "mappings": mappings,
+                "ref_id": ref_id
             })
             
         return components
+

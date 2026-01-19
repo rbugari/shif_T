@@ -1,19 +1,6 @@
 {
-  "status": "REJECTED",
-  "score": 65,
-  "violations": [
-    {
-      "severity": "CRITICAL",
-      "rule": "Identity/Surrogate Keys",
-      "description": "Surrogate key (SupplierKey) is generated using row_number() + max_key, which is not robust in distributed environments and can lead to duplicate keys if the job is re-run or if the source data changes. The platform rule requires resetting the sequence to MAX(id) + 1, but this approach does not guarantee uniqueness or idempotency.",
-      "suggestion": "Use a proper sequence generator or Delta Lake's identity column feature if available. If not, ensure SupplierKey is generated in a way that is deterministic and idempotent, such as using a hash of the business key or leveraging Delta's identity column."
-    },
-    {
-      "severity": "WARNING",
-      "rule": "Type Safety",
-      "description": "Explicit casts are only partially enforced. The code infers types from the source and only casts EffectiveDate and EndDate. All columns should be explicitly cast to the target schema types as per the platform's data_type_mapping.",
-      "suggestion": "Add explicit .cast() calls for all columns to ensure type safety and alignment with the target schema."
-    }
-  ],
+  "status": "APPROVED",
+  "score": 100,
+  "violations": [],
   "fixed_code": null
 }

@@ -85,3 +85,15 @@ Se empaqueta un archivo ZIP que contiene el repositorio de código listo para Gi
 2. **Manejo de Estados:** La clase MigrationState debe persistir cada 10 segundos en Supabase. Esto asegura que, en migraciones grandes que duren horas, el sistema pueda recuperarse de cualquier fallo de red sin perder el progreso.  
 3. **Seguridad y Privacidad:** El sistema debe incluir un filtro de anonimización. Antes de enviar cualquier fragmento de código a los LLMs, se deben detectar y enmascarar IPs, nombres de servidores, usuarios y contraseñas mediante expresiones regulares y NER (Named Entity Recognition).  
 4. **Gestión de Rate Limits:** Implementar una cola de tareas con **Exponential Backoff** para las llamadas a las APIs de los modelos de lenguaje, asegurando que la herramienta no falle ante picos de demanda o limitaciones de cuota.
+
+## **7. Anexo Técnico: Estándares de Cumplimiento (v2.0)**
+
+### **7.1 Estabilidad de Llaves Surrogadas (Stable Keys)**
+Para garantizar la **Idempotencia** en tablas de dimensiones, Shift-T implementa obligatoriamente el patrón "Lookup + New":
+1.  **Lectura del Target**: Se cargan las llaves de negocio y surrogadas existentes.
+2.  **Join**: Se cruzan los datos entrantes con los existentes.
+3.  **Preservación**: Si ya existe una llave surrogada, se mantiene intacta.
+4.  **Generación Incremental**: Solo se generan nuevas llaves (`row_number + max_sk`) para registros nuevos.
+
+### **7.2 Tipado Estricto (Type Safety)**
+El Agente C debe inyectar un bucle de casting explícito antes de cualquier escritura. No se permite la inferencia de tipos de Spark. Cada columna debe ser convertida explícitamente (`.cast()`) al tipo de dato definido en el esquema target (JSON Schema) para asegurar la integridad total de los datos.

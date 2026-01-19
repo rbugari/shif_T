@@ -31,6 +31,7 @@ class DeveloperService:
         with open(self.prompt_path, "r", encoding="utf-8") as f:
             return f.read()
 
+    @logger.llm_debug("Developer-Transpiler")
     async def generate_code(self, 
                             task_def: Dict[str, Any], 
                             platform_spec: Dict[str, Any], 

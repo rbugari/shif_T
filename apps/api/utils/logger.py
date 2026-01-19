@@ -1,8 +1,10 @@
 import os
 import sys
 import json
+import time
 from datetime import datetime
-from typing import Any, Dict
+from functools import wraps
+from typing import Any, Dict, List
 
 class ShiftLogger:
     def __init__(self):
@@ -46,5 +48,41 @@ class ShiftLogger:
             
             sys.stdout.flush()
 
+    def llm_debug(self, agent_name: str):
+        """Decorator to log LLM inputs and outputs in full detail."""
+        def decorator(func):
+            @wraps(func)
+            async def wrapper(*args, **kwargs):
+                if not self.debug_mode:
+                    return await func(*args, **kwargs)
+
+                start_time = time.time()
+                self.log(f"--- 🤖 LLM START: {agent_name} ---", "DEBUG", agent_name)
+                
+                # Log inputs (assuming args[0] is self, then node_data or similar)
+                # For more robustness, we just log kwargs or important params
+                if len(args) > 1:
+                    self.debug(f"Input Data ({agent_name})", agent_name, args[1])
+
+                try:
+                    result = await func(*args, **kwargs)
+                    duration = time.time() - start_time
+                    
+                    self.log(f"--- ✅ LLM SUCCESS: {agent_name} ({duration:.2f}s) ---", "DEBUG", agent_name)
+                    # Use a truncated view for the result if it's too big, or just log the keys
+                    if isinstance(result, dict):
+                         self.debug(f"Response Summary ({agent_name})", agent_name, {k: (str(v)[:100] + "...") if isinstance(v, str) and len(str(v)) > 100 else v for k,v in result.items()})
+                    else:
+                         self.debug(f"Response ({agent_name})", agent_name, result)
+                    
+                    return result
+                except Exception as e:
+                    duration = time.time() - start_time
+                    self.error(f"--- ❌ LLM FAILED: {agent_name} ({duration:.2f}s) --- Error: {str(e)}", agent_name)
+                    raise e
+            return wrapper
+        return decorator
+
 # Singleton instance for easy import
 logger = ShiftLogger()
+

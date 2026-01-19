@@ -645,6 +645,25 @@ async def unlock_triage(project_id: str):
     success = await db.update_project_status(project_uuid, "TRIAGE")
     return {"success": success, "status": "TRIAGE"}
 
+@app.get("/projects/{project_id}/logs")
+async def get_project_logs(project_id: str):
+    """Returns the content of the migration log file."""
+    # Resolve Project Name
+    db = SupabasePersistence()
+    project_name = project_id
+    if "-" in project_id:
+        n = await db.get_project_name_by_id(project_id)
+        if n: project_name = n
+    
+    try:
+        # Use PersistenceService to resolve path securely
+        content = PersistenceService.read_file_content(project_name, "migration.log")
+        return {"logs": content}
+    except ValueError:
+        return {"logs": ""} # File likely doesn't exist yet
+    except Exception as e:
+        return {"logs": f"Error reading logs: {e}"}
+
 @app.get("/projects/{project_id}/status")
 async def get_project_status(project_id: str):
     """Returns the current governance status."""

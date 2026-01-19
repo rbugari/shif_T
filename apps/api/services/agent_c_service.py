@@ -3,6 +3,14 @@ import json
 from typing import Dict, Any, List
 from langchain_openai import AzureChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
+try:
+    from apps.api.utils.logger import logger
+except ImportError:
+    try:
+        from utils.logger import logger
+    except ImportError:
+        from ..utils.logger import logger
+
 
 class AgentCService:
     def __init__(self):
@@ -20,6 +28,7 @@ class AgentCService:
         with open(target_path, "r", encoding="utf-8") as f:
             return f.read()
 
+    @logger.llm_debug("Agent-C-Developer")
     async def transpile_task(self, node_data: Dict[str, Any], context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Transpiles a single SSIS task into PySpark code following defined standards."""
         system_prompt = self._load_prompt(self.prompt_path)
@@ -35,7 +44,7 @@ class AgentCService:
         Task Description: {node_data.get('description')}
         
         CONTEXT:
-        {json.dumps(context or {{}}, indent=2)}
+        {json.dumps(context or {}, indent=2)}
         """
 
         messages = [
@@ -55,7 +64,7 @@ class AgentCService:
         try:
             return json.loads(content)
         except json.JSONDecodeError:
-            return {{
+            return {
                 "error": "Failed to parse LLM response as JSON",
                 "raw_response": content
-            }}
+            }

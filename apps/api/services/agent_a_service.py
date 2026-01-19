@@ -26,8 +26,9 @@ class AgentAService:
         
         self.prompt_path = os.path.join(os.path.dirname(__file__), "..", "prompts", "agent_a_discovery.md")
         
-    def _load_prompt(self) -> str:
-        with open(self.prompt_path, "r", encoding="utf-8") as f:
+    def _load_prompt(self, path: str = None) -> str:
+        target_path = path or self.prompt_path
+        with open(target_path, "r", encoding="utf-8") as f:
             return f.read()
 
     async def analyze_manifest(self, manifest: Dict[str, Any], system_prompt_override: str = None) -> Dict[str, Any]:

@@ -7,145 +7,113 @@
 from delta.tables import *
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
+from pyspark.sql.window import Window
 
 # 2. Reading Bronze / Source
-# -- Setup JDBC connection for source query
-jdbc_url = dbutils.secrets.get(scope="jdbc-secrets", key="hr_db_url")
-jdbc_user = dbutils.secrets.get(scope="jdbc-secrets", key="hr_db_user")
-jdbc_password = dbutils.secrets.get(scope="jdbc-secrets", key="hr_db_password")
+# -- JDBC connection details (replace with your actual secret scope/keys)
+db_url = dbutils.secrets.get(scope="jdbc-secrets", key="hr_db_url")
+db_user = dbutils.secrets.get(scope="jdbc-secrets", key="hr_db_user")
+db_password = dbutils.secrets.get(scope="jdbc-secrets", key="hr_db_password")
 
-source_query = '''SELECT empid, (firstname + ' ' + lastname) as fullname, title, city, country, address, phone FROM HR.Employees WHERE empid > 0'''
+# -- Parameter for empid lower bound (simulate SSIS parameter)
+empid_min = dbutils.widgets.get("empid_min") if dbutils.widgets.get("empid_min", None) else "0"
 
-# Read source data (parameterized value replaced with 0 for migration)
+source_query = f"""
+    SELECT empid, (firstname + ' ' + lastname) as fullname, title, city, country, address, phone
+    FROM HR.Employees
+    WHERE empid > {empid_min}
+"""
+
 df_source = (
     spark.read.format("jdbc")
-    .option("url", jdbc_url)
-    .option("user", jdbc_user)
-    .option("password", jdbc_password)
+    .option("url", db_url)
+    .option("user", db_user)
+    .option("password", db_password)
     .option("dbtable", f"({source_query}) as src")
     .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
     .load()
 )
 
 # 3. Transformations (Apply Logic)
-# -- Explicitly cast columns as per target schema (assumed typical DimEmployee schema)
-# -- If schema is not provided, use best-practice types per platform rules
+# -- No lookups, just direct mapping
 
-# Define target schema (update as per actual schema if available)
-target_schema = StructType([
-    StructField("EmployeeKey", IntegerType(), False),  # Surrogate Key
-    StructField("EmpID", IntegerType(), True),
-    StructField("FullName", StringType(), True),
-    StructField("Title", StringType(), True),
-    StructField("City", StringType(), True),
-    StructField("Country", StringType(), True),
-    StructField("Address", StringType(), True),
-    StructField("Phone", StringType(), True),
-    StructField("EffectiveFrom", TimestampType(), False),
-    StructField("EffectiveTo", TimestampType(), False),
-    StructField("IsCurrent", BooleanType(), False)
-])
+# 3.1 Surrogate Key Generation (STABLE & IDEMPOTENT)
+# SAFE MIGRATION PATTERN: Lookup existing keys, generate new ones only for new members.
+import pyspark.sql.functions as F
 
-# Standardize column names and types
-from pyspark.sql import functions as F
+target_table_name = "DimEmployee"
+bk_cols = ["empid"]
+sk_col = "EmployeeKey"
 
-df_transformed = (
-    df_source
-    .withColumnRenamed("empid", "EmpID")
-    .withColumnRenamed("fullname", "FullName")
-    .withColumnRenamed("title", "Title")
-    .withColumnRenamed("city", "City")
-    .withColumnRenamed("country", "Country")
-    .withColumnRenamed("address", "Address")
-    .withColumnRenamed("phone", "Phone")
-    .withColumn("EmpID", col("EmpID").cast(IntegerType()))
-    .withColumn("FullName", col("FullName").cast(StringType()))
-    .withColumn("Title", col("Title").cast(StringType()))
-    .withColumn("City", col("City").cast(StringType()))
-    .withColumn("Country", col("Country").cast(StringType()))
-    .withColumn("Address", col("Address").cast(StringType()))
-    .withColumn("Phone", col("Phone").cast(StringType()))
-    .withColumn("EffectiveFrom", current_timestamp())
-    .withColumn("EffectiveTo", lit("9999-12-31 23:59:59").cast(TimestampType()))
-    .withColumn("IsCurrent", lit(True))
-)
+# 1. Get Existing Keys (Handle if table doesn't exist yet)
+try:
+    df_target = spark.read.table(target_table_name).select(*bk_cols, sk_col)
+    max_sk = df_target.agg(F.max(F.col(sk_col))).collect()[0][0] or 0
+except Exception:
+    df_target = None
+    max_sk = 0
 
-# 4. Surrogate Key Logic (Identity Handling)
-# -- Get current max EmployeeKey from target
-from pyspark.sql.window import Window
+# 2. Join Source with Target to find existing SKs
+if df_target is not None:
+    df_joined = df_source.join(df_target, on=bk_cols, how="left")
+else:
+    df_joined = df_source.withColumn(sk_col, F.lit(None).cast("integer"))
 
-target_table = "DimEmployee"
+# 3. Generate Keys for New Rows ONLY
+window_spec = Window.orderBy(*bk_cols)
+df_existing = df_joined.filter(F.col(sk_col).isNotNull())
+df_new = df_joined.filter(F.col(sk_col).isNull()).drop(sk_col)  # Drop null SK to regenerate
 
-def ensure_dim_table_exists():
-    if not spark._jsparkSession.catalog().tableExists(target_table):
-        # Create with unknown member
-        unknown_df = spark.createDataFrame([
-            (-1, -1, "Unknown", None, None, None, None, None, \
-             "1900-01-01 00:00:00", "9999-12-31 23:59:59", True)
-        ], schema=target_schema)
-        unknown_df.write.format("delta").mode("overwrite").saveAsTable(target_table)
+df_new = df_new.withColumn(sk_col, F.row_number().over(window_spec) + max_sk)
 
-ensure_dim_table_exists()
+# 4. Union
+from functools import reduce
 
-df_target = spark.read.table(target_table)
+df_with_sk = df_existing.unionByName(df_new)
 
-max_id = df_target.agg({"EmployeeKey": "max"}).collect()[0][0]
-if max_id is None:
-    max_id = 0
+# 3.2 Unknown Member Handling (For Dimensions)
+def ensure_unknown_member(df):
+    # Define the schema for the unknown member
+    unknown_row = {
+        "EmployeeKey": -1,
+        "empid": -1,
+        "fullname": "Unknown",
+        "title": "Unknown",
+        "city": "Unknown",
+        "country": "Unknown",
+        "address": "Unknown",
+        "phone": "Unknown"
+    }
+    # Check if unknown exists
+    if df.filter(col("EmployeeKey") == -1).count() == 0:
+        df_unknown = spark.createDataFrame([unknown_row], schema=df.schema)
+        df = df.unionByName(df_unknown)
+    return df
 
-# Assign surrogate keys
-w = Window.orderBy(monotonically_increasing_id())
-df_with_sk = df_transformed.withColumn(
-    "EmployeeKey", row_number().over(w) + max_id
-)
+df_with_sk = ensure_unknown_member(df_with_sk)
 
-# 5. Unknown Member Enforcement
-# -- Already ensured in table creation above
+# 4. Mandatory Type Casting (STRICT)
+# -- Define the target schema explicitly (since not provided in JSON)
+target_schema = [
+    {"name": "EmployeeKey", "type": "INTEGER"},
+    {"name": "empid", "type": "INTEGER"},
+    {"name": "fullname", "type": "STRING"},
+    {"name": "title", "type": "STRING"},
+    {"name": "city", "type": "STRING"},
+    {"name": "country", "type": "STRING"},
+    {"name": "address", "type": "STRING"},
+    {"name": "phone", "type": "STRING"}
+]
 
-# 6. Writing to Silver/Gold (Apply Platform Pattern)
-# -- SCD Type 2 Merge
-from delta.tables import DeltaTable
+for field in target_schema:
+    col_name = field["name"]
+    target_type = field["type"]
+    if col_name in df_with_sk.columns:
+        df_with_sk = df_with_sk.withColumn(col_name, col(col_name).cast(target_type))
 
-delta_target = DeltaTable.forName(spark, target_table)
+# 5. Writing to Silver/Gold (Apply Platform Pattern)
+# -- Overwrite the table (idempotent for dimensions)
+df_with_sk.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table_name)
 
-# Prepare merge condition (business key is EmpID)
-merge_condition = "source.EmpID = target.EmpID AND target.IsCurrent = true"
-
-# Prepare update and insert sets
-update_set = {
-    "EffectiveTo": "source.EffectiveFrom",
-    "IsCurrent": "false"
-}
-insert_set = {
-    "EmployeeKey": "source.EmployeeKey",
-    "EmpID": "source.EmpID",
-    "FullName": "source.FullName",
-    "Title": "source.Title",
-    "City": "source.City",
-    "Country": "source.Country",
-    "Address": "source.Address",
-    "Phone": "source.Phone",
-    "EffectiveFrom": "source.EffectiveFrom",
-    "EffectiveTo": "source.EffectiveTo",
-    "IsCurrent": "true"
-}
-
-# Perform SCD Type 2 Merge
-(
-    delta_target.alias("target")
-    .merge(
-        df_with_sk.alias("source"),
-        merge_condition
-    )
-    .whenMatchedUpdate(
-        condition="target.FullName <> source.FullName OR target.Title <> source.Title OR target.City <> source.City OR target.Country <> source.Country OR target.Address <> source.Address OR target.Phone <> source.Phone",
-        set=update_set
-    )
-    .whenNotMatchedInsert(
-        values=insert_set
-    )
-    .execute()
-)
-
-# 7. Optimization (Z-ORDER on EmpID)
-spark.sql(f"OPTIMIZE {target_table} ZORDER BY (EmpID)")
+# 6. Optimization (Z-ORDER on empid)
+spark.sql(f"OPTIMIZE {target_table_name} ZORDER BY (empid)")

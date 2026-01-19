@@ -89,25 +89,26 @@ class DiscoveryService:
                     try:
                         parser = SSISParser(content_str)
                         summary = parser.get_summary()
-                        execs = parser.extract_executables()
+                        medulla = parser.get_logical_medulla()
                         
-                        signatures.append("SSIS Package")
+                        signatures.append("SSIS Package (Optimized Scan)")
                         if summary.get("executable_count", 0) > 0:
                             signatures.append(f"Contains {summary['executable_count']} Executables")
                         
-                        # Structured Metadata for Agent A
-                        metadata["executables"] = execs
+                        # High-Quality Metadata for Architect Agents
+                        metadata["logical_medulla"] = medulla
                         metadata["connections"] = summary.get("connection_managers", [])
                         
-                        # Invocations (Execute Package Tasks)
-                        for ex in execs:
-                            if "ExecutePackageTask" in (ex.get("type") or ""):
-                                invocations.append(f"Executes Package: {ex.get('name')}")
-                            if "ExecuteSQLTask" in (ex.get("type") or ""):
-                                invocations.append(f"Runs SQL: {ex.get('name')}")
+                        # Invocations (semantic detection)
+                        for comp in medulla.get("data_flow_logic", []):
+                            if comp.get("intent") == "SOURCE":
+                                invocations.append(f"Reads from: {comp.get('name')}")
+                            if comp.get("intent") == "DESTINATION":
+                                invocations.append(f"Writes to: {comp.get('name')}")
 
                     except Exception as ssis_err:
                         signatures.append(f"SSIS Parse Error: {str(ssis_err)}")
+
                     
                 # SQL
                 elif ext == 'sql':

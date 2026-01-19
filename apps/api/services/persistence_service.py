@@ -5,7 +5,9 @@ from supabase import create_client, Client
 
 class PersistenceService:
     print("LOADING PersistenceService v2 - WITH initialize_project_from_source")
-    BASE_DIR = os.path.join(os.getcwd(), "solutions")
+    # Base directory for local file storage (Solutions)
+    # Calculated relative to this file to be robust against CWD changes
+    BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "solutions"))
 
     @classmethod
     def ensure_solution_dir(cls, solution_name: str) -> str:

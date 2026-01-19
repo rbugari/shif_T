@@ -1,18 +1,18 @@
 {
   "status": "REJECTED",
-  "score": 70,
+  "score": 85,
   "violations": [
-    {
-      "severity": "CRITICAL",
-      "rule": "Identity/Surrogate Keys",
-      "description": "The code uses 'monotonically_increasing_id()' to generate 'ProductKey' if it does not exist. Platform rules require resetting the sequence to MAX(id) + 1, not generating new IDs arbitrarily.",
-      "suggestion": "After reading the target table, set the next ProductKey as MAX(ProductKey) + 1 and assign it to new records. Do not use 'monotonically_increasing_id()' for surrogate keys."
-    },
     {
       "severity": "WARNING",
       "rule": "Type Safety",
-      "description": "No explicit type casts are performed when adding the unknown member (-1) for 'ProductKey'. If the schema expects a different type, this may cause issues.",
-      "suggestion": "Explicitly cast the '-1' value to match the 'ProductKey' column type."
+      "description": "Type casting is performed using inferred schema from the DataFrame, not explicit target schema. This may lead to mismatches if source types drift or are not aligned with the platform's data_type_mapping.",
+      "suggestion": "Replace the dynamic type inference with explicit schema definitions based on the platform's data_type_mapping rules."
+    },
+    {
+      "severity": "WARNING",
+      "rule": "Identity/Surrogate Keys",
+      "description": "Surrogate key generation uses row_number() + max_sk, which is correct for migration, but does not reset the sequence in the target table DDL to MAX(id) + 1 as required by the platform rules.",
+      "suggestion": "After migration, ensure the target table's identity/sequence is reset to MAX(ProductKey) + 1 in the DDL."
     }
   ],
   "fixed_code": null

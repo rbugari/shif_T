@@ -5,7 +5,9 @@ import MeshGraph from "../../components/MeshGraph";
 import CodeDiffViewer from "../../components/CodeDiffViewer";
 import TriageView from "../../components/stages/TriageView";
 import DraftingView from "../../components/stages/DraftingView";
+import GovernanceView from "../../components/stages/GovernanceView";
 import WorkflowToolbar from "../../components/WorkflowToolbar";
+
 import { useParams } from "next/navigation";
 import { API_BASE_URL } from "../../lib/config";
 import {
@@ -139,7 +141,50 @@ export default function WorkspacePage() {
         }
     };
 
+    const [isStageComplete, setIsStageComplete] = useState(false);
+
+    // Reset completion when stage changes
+    useEffect(() => {
+        setIsStageComplete(false);
+    }, [stage]);
+
+    const handleApproveStage = async () => {
+        if (!id) return;
+        try {
+            const nextStage = stage + 1;
+            const res = await fetch(`${API_BASE_URL}/projects/${id}/stage`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ stage: nextStage.toString() })
+            });
+            const data = await res.json();
+            if (data.success) {
+                setStage(nextStage);
+            }
+        } catch (e) {
+            console.error("Failed to update stage", e);
+        }
+    };
+
     if (!id) return <div className="flex items-center justify-center h-screen">Loading Workspace...</div>;
+
+    // Resolve Action Button Props based on Stage
+    let actionLabel = undefined;
+    let onAction = undefined;
+    let actionDisabled = false;
+
+    if (stage === 1) {
+        actionLabel = "Iniciar Drafting";
+        onAction = () => setStage(2); // Manual transition for now or check triage status
+        // Triage is mostly manual/exploration, so maybe always enabled or check if nodes > 0
+    } else if (stage === 2) {
+        actionLabel = "Aprobar & Refinar";
+        onAction = handleApproveStage;
+        actionDisabled = !isStageComplete;
+    } else if (stage === 3) {
+        actionLabel = "Generar Output";
+        onAction = () => setStage(4);
+    }
 
     return (
         <ReactFlowProvider>
@@ -193,7 +238,13 @@ export default function WorkspacePage() {
                         </div>
 
                         {/* New Visual Workflow Toolbar */}
-                        <WorkflowToolbar currentStage={stage} onSetStage={setStage} />
+                        <WorkflowToolbar
+                            currentStage={stage}
+                            onSetStage={setStage}
+                            actionLabel={actionLabel}
+                            onAction={onAction}
+                            actionDisabled={actionDisabled}
+                        />
                     </header>
 
                     {/* Stage Content */}
@@ -203,92 +254,90 @@ export default function WorkspacePage() {
                         )}
 
                         {stage === 2 && (
-                            <DraftingView projectId={id} onStageChange={setStage} />
+                            <DraftingView
+                                projectId={id}
+                                onStageChange={setStage}
+                                onCompletion={(c: boolean) => setIsStageComplete(c)}
+                            />
                         )}
 
                         {stage === 3 && (
-                            <div className="h-full w-full flex flex-col">
-                                <div className="p-4 bg-gray-50/50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center">
-                                    <h2 className="font-bold flex items-center gap-2"><GitCommit size={18} /> Code Review: {selectedNode?.data?.label || "Select a node"}</h2>
-                                    <div className="flex items-center gap-2">
-                                        <button className="text-xs bg-white border border-gray-300 px-3 py-1 rounded shadow-sm">Agent F Suggestions</button>
+                            <div className="h-full w-full flex flex-col bg-gray-50 dark:bg-gray-950">
+                                <div className="px-6 py-4 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center shadow-sm">
+                                    <div className="flex flex-col">
+                                        <h2 className="font-bold text-lg flex items-center gap-2">
+                                            <Code className="text-primary" size={20} />
+                                            Refinement: {selectedNode?.data?.label || "Architectural Review"}
+                                        </h2>
+                                        <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Comparing Legacy Logic vs Cloud Native Target</p>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <div className="flex -space-x-2">
+                                            <div className="w-8 h-8 rounded-full border-2 border-white dark:border-gray-900 bg-blue-500 flex items-center justify-center text-[10px] font-bold text-white shadow-sm" title="Agent C">C</div>
+                                            <div className="w-8 h-8 rounded-full border-2 border-white dark:border-gray-900 bg-purple-500 flex items-center justify-center text-[10px] font-bold text-white shadow-sm" title="Agent F">F</div>
+                                        </div>
+                                        <button className="bg-primary text-white px-4 py-1.5 rounded-lg text-xs font-bold shadow-md hover:bg-secondary transition-all flex items-center gap-2">
+                                            Apply Optimizations <ArrowRight size={14} />
+                                        </button>
                                     </div>
                                 </div>
-                                <div className="flex-1 relative">
+                                <div className="flex-1 relative m-4 rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800 shadow-xl bg-white dark:bg-gray-900">
                                     <CodeDiffViewer
                                         originalCode={originalCode}
                                         modifiedCode={optimizedCode}
                                     />
                                     {isTranspiling && (
-                                        <div className="absolute inset-0 bg-white/50 dark:bg-black/50 flex items-center justify-center z-10 backdrop-blur-sm">
-                                            <div className="flex flex-col items-center gap-3">
-                                                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
-                                                <div className="text-sm font-bold bg-white dark:bg-gray-800 px-4 py-2 rounded-full shadow-lg">Generating Code...</div>
+                                        <div className="absolute inset-0 bg-white/60 dark:bg-black/60 flex items-center justify-center z-10 backdrop-blur-md">
+                                            <div className="flex flex-col items-center gap-4">
+                                                <div className="relative">
+                                                    <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-primary"></div>
+                                                    <div className="absolute inset-0 flex items-center justify-center">
+                                                        <Activity size={24} className="text-primary animate-pulse" />
+                                                    </div>
+                                                </div>
+                                                <div className="text-sm font-bold bg-white dark:bg-gray-800 px-6 py-3 rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-700 flex flex-col items-center gap-1">
+                                                    <span>Architecting PySpark...</span>
+                                                    <span className="text-[10px] text-gray-400 font-normal">Applying Medallion Standards</span>
+                                                </div>
                                             </div>
                                         </div>
                                     )}
                                 </div>
-                                <div className="h-48 border-t border-gray-200 dark:border-gray-800 p-4 bg-orange-50/30 dark:bg-orange-900/10 overflow-y-auto">
-                                    <h3 className="text-sm font-bold text-orange-600 dark:text-orange-400 mb-2 flex items-center gap-2">
-                                        💡 Sugerencias de Optimización {suggestions.length > 0 && `(${suggestions.length})`}
+                                <div className="h-64 mx-4 mb-4 bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-md p-6 overflow-hidden flex flex-col">
+                                    <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                        <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
+                                        Compliance Insights & Suggestions
                                     </h3>
-                                    {suggestions.length === 0 ? (
-                                        <p className="text-xs text-gray-400 italic">Selecciona un nodo para ver análisis.</p>
-                                    ) : (
-                                        <ul className="space-y-2 text-sm text-gray-700 dark:text-gray-300">
-                                            {suggestions.map((sug, idx) => (
-                                                <li key={idx} className="flex items-start gap-2">
-                                                    <input type="checkbox" className="mt-1" defaultChecked />
-                                                    <div>
-                                                        {sug}
+                                    <div className="flex-1 overflow-y-auto custom-scrollbar pr-2">
+                                        {suggestions.length === 0 ? (
+                                            <div className="h-full flex flex-col items-center justify-center text-center opacity-50 grayscale scale-90">
+                                                <FileText size={48} className="text-gray-200 mb-2" />
+                                                <p className="text-xs text-gray-400 italic">Select a component to trigger architectural audit.</p>
+                                            </div>
+                                        ) : (
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                {suggestions.map((sug, idx) => (
+                                                    <div key={idx} className="flex items-start gap-3 p-4 bg-orange-50/50 dark:bg-orange-900/10 rounded-xl border border-orange-100 dark:border-orange-900/30 group hover:border-orange-300 transition-all">
+                                                        <div className="mt-0.5">
+                                                            <input type="checkbox" className="w-4 h-4 rounded text-orange-600 focus:ring-orange-500 border-orange-200" defaultChecked />
+                                                        </div>
+                                                        <div className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed font-medium">
+                                                            {sug}
+                                                        </div>
                                                     </div>
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    )}
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         )}
+
 
                         {stage === 4 && (
-                            <div className="p-10 max-w-4xl mx-auto h-full overflow-y-auto">
-                                <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-8 shadow-sm">
-                                    <div className="flex items-center gap-4 mb-6">
-                                        <div className="w-12 h-12 bg-green-100 text-green-600 rounded-full flex items-center justify-center">
-                                            <CheckCircle size={24} />
-                                        </div>
-                                        <div>
-                                            <h2 className="text-2xl font-bold">Ready for Delivery</h2>
-                                            <p className="text-gray-500">Governance checks passed. 0 Critical Issues.</p>
-                                        </div>
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-6 mb-8">
-                                        <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-100 dark:border-gray-700">
-                                            <h3 className="font-bold mb-2 flex items-center gap-2"><FileText size={16} /> Documentation</h3>
-                                            <p className="text-sm text-gray-500 mb-3">Technical specs and lineage generated.</p>
-                                            <button className="text-primary text-sm font-medium hover:underline">View Docs</button>
-                                        </div>
-                                        <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-100 dark:border-gray-700">
-                                            <h3 className="font-bold mb-2 flex items-center gap-2"><GitPullRequest size={16} /> Repository</h3>
-                                            <p className="text-sm text-gray-500 mb-3">Code pushed to origin/main.</p>
-                                            <button className="text-primary text-sm font-medium hover:underline">View Repo</button>
-                                        </div>
-                                    </div>
-
-                                    <div className="flex justify-end pt-6 border-t border-gray-100 dark:border-gray-800">
-                                        <a
-                                            href={`${API_BASE_URL}/solutions/${id}/export`}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="bg-black dark:bg-white text-white dark:text-black px-6 py-3 rounded-lg font-bold flex items-center gap-2 hover:opacity-80 transition-opacity"
-                                        >
-                                            <Download size={18} /> Download Deliverable (.zip)
-                                        </a>
-                                    </div>
-                                </div>
-                            </div>
+                            <GovernanceView projectId={id} />
                         )}
+
                     </div>
                 </main>
             </div>

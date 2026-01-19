@@ -9,7 +9,10 @@ import {
     MarkerType
 } from '@xyflow/react';
 import MeshGraph from '../MeshGraph';
-import { CheckCircle, Layout, List, Terminal, MessageSquare, Play, FileText, Trash2, RotateCcw, PanelLeftClose, PanelLeftOpen, Expand, Shrink, Save } from 'lucide-react';
+import { CheckCircle, Layout, List, Terminal, MessageSquare, Play, FileText, RotateCcw, PanelLeftClose, PanelLeftOpen, Expand, Shrink, Save, ShieldCheck, AlertTriangle } from 'lucide-react';
+
+import DiscoveryDashboard from '../DiscoveryDashboard';
+
 import { API_BASE_URL } from '../../lib/config';
 
 // Tab Definitions
@@ -363,13 +366,30 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
                 }`}>
                 {/* Read Only Banner */}
                 {isReadOnly && (
-                    <div className="bg-yellow-100 border-b border-yellow-200 px-4 py-2 text-xs font-bold text-yellow-800 flex items-center justify-center gap-2">
-                        <Save size={14} /> MODO LECTURA: El diseño ha sido aprobado y el alcance está cerrado. Desbloquea el proyecto para editar.
-                        <button onClick={onStageChange ? () => onStageChange(2) : undefined} className="ml-4 underline text-yellow-900">
-                            Ir a Drafting &rarr;
-                        </button>
+                    <div className="bg-gradient-to-r from-blue-600 to-indigo-700 px-6 py-2.5 text-white flex items-center justify-between shadow-lg z-[60]">
+                        <div className="flex items-center gap-3">
+                            <div className="p-1.5 bg-white/20 rounded-lg backdrop-blur-sm">
+                                <ShieldCheck size={18} />
+                            </div>
+                            <div className="flex flex-col">
+                                <span className="text-[10px] font-bold uppercase tracking-widest opacity-80">Design Status</span>
+                                <span className="text-sm font-bold">APPROVED & LOCKED</span>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                            <span className="text-xs font-medium text-blue-100 hidden md:block">
+                                The scope is finalized and ready for orchestration.
+                            </span>
+                            <button
+                                onClick={onStageChange ? () => onStageChange(2) : undefined}
+                                className="bg-white text-blue-700 px-4 py-1.5 rounded-full text-xs font-bold shadow-md hover:bg-blue-50 transition-all flex items-center gap-2"
+                            >
+                                <Play size={14} fill="currentColor" /> Resume Drafting
+                            </button>
+                        </div>
                     </div>
                 )}
+
 
                 {/* Top Tabs Bar */}
                 <div className={`flex items-center justify-between px-4 bg-white dark:bg-gray-950 border-b border-gray-200 dark:border-gray-800 shadow-sm transition-all ${isFullscreen ? 'py-1 opacity-80 hover:opacity-100' : 'py-0'
@@ -456,12 +476,16 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
                                             <PanelLeftClose size={14} />
                                         </button>
                                     </div>
-                                    <div className="flex-1 overflow-hidden min-w-[256px]">
-                                        {/* Simplified Assets List for Dragging */}
+                                    <div className="flex-1 overflow-hidden min-w-[256px] custom-scrollbar">
+                                        <div className="p-4 border-b border-gray-100 dark:border-gray-800">
+                                            <DiscoveryDashboard assets={assets} nodes={nodes} />
+                                        </div>
+
                                         {isLoading ? (
                                             <div className="p-4 text-center text-gray-400 text-xs">Cargando...</div>
                                         ) : (
-                                            <div className="overflow-y-auto h-full p-2 space-y-2">
+                                            <div className="overflow-y-auto max-h-[calc(100vh-350px)] p-3 space-y-2">
+                                                <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest px-1 mb-2">Available Components</h4>
                                                 {assets.map(asset => (
                                                     <div
                                                         key={asset.id}
@@ -470,16 +494,22 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
                                                             e.dataTransfer.setData('application/reactflow', JSON.stringify(asset));
                                                             e.dataTransfer.effectAllowed = 'move';
                                                         }}
-                                                        className="p-2 text-xs bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800 rounded hover:border-primary/50 cursor-grab flex items-center gap-2"
+                                                        className="p-3 text-xs bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-xl hover:border-primary/50 hover:shadow-md cursor-grab flex items-center gap-3 transition-all group"
                                                     >
-                                                        <Layout size={12} className="text-gray-400" />
-                                                        <span className="truncate">{asset.name}</span>
+                                                        <div className="p-1.5 bg-gray-50 dark:bg-gray-950 rounded-lg group-hover:bg-primary/10 transition-colors">
+                                                            <Layout size={14} className="text-gray-400 group-hover:text-primary" />
+                                                        </div>
+                                                        <div className="flex flex-col min-w-0">
+                                                            <span className="font-bold truncate text-gray-700 dark:text-gray-200">{asset.name}</span>
+                                                            <span className="text-[9px] text-gray-400 uppercase">{asset.complexity || 'Low'} Complexity</span>
+                                                        </div>
                                                     </div>
                                                 ))}
-                                                {assets.length === 0 && <div className="text-center text-gray-400 text-xs py-4">Sin activos</div>}
+                                                {assets.length === 0 && <div className="text-center text-gray-400 text-xs py-10 italic">No assets found in manifest</div>}
                                             </div>
                                         )}
                                     </div>
+
                                 </div>
                             )}
 
@@ -505,10 +535,8 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
                                     onInit={setReactFlowInstance}
                                     onDrop={onDrop}
                                     onDragOver={onDragOver}
-                                    onNodeDragStop={(_, __, allNodes) => {
+                                    onNodeDragStop={(_: any, __: any, allNodes: any[]) => {
                                         // Auto-save on drag stop
-                                        // Note: ReactFlow might pass allNodes, if not we rely on state but state might be stale in this closure.
-                                        // Ideally, use the nodes passed in argument if available.
                                         if (allNodes) {
                                             saveLayout(allNodes, edges);
                                         } else {
@@ -516,10 +544,11 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
                                             saveLayout(nodes, edges);
                                         }
                                     }}
-                                    onNodesDelete={(deletedNodes) => {
-                                        const deletedIds = deletedNodes.map(n => n.id);
+                                    onNodesDelete={(deletedNodes: any[]) => {
+                                        const deletedIds = deletedNodes.map((n: any) => n.id);
                                         setAssets(prev => prev.map(a => deletedIds.includes(a.id) ? { ...a, type: 'IGNORED' } : a));
                                     }}
+
                                 />
                                 {nodes.length === 0 && (
                                     <div className="absolute inset-0 flex items-center justify-center pointer-events-none">

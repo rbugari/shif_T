@@ -21,6 +21,14 @@ except ImportError:
     except ImportError:
         from ..utils.logger import logger
 
+try:
+    from apps.api.services.persistence_service import PersistenceService
+except ImportError:
+    try:
+        from services.persistence_service import PersistenceService
+    except ImportError:
+        from .persistence_service import PersistenceService
+
 class LibrarianService:
     """
     The Librarian: Context Awareness Agent.
@@ -34,7 +42,7 @@ class LibrarianService:
         # TODO: Refactor to use PersistenceService to resolve paths cleanly.
         self.project_id = project_id
         # Strict I/O: Data flows IN from 'Data' folder
-        self.base_path = os.path.join(os.getcwd(), "solutions", project_id)
+        self.base_path = PersistenceService.ensure_solution_dir(project_id)
         self.data_path = os.path.join(self.base_path, "Data")
         self.output_path = os.path.join(self.base_path, "Output")
         

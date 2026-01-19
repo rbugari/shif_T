@@ -7,64 +7,94 @@
 from delta.tables import *
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
+from pyspark.sql.window import Window
+import pyspark.sql.functions as F
 
 # 2. Reading Bronze / Source
-# -- Extract JDBC SQL from Inputs
-# NOTE: You must set these values in your Databricks environment or via widgets
-jdbc_url = dbutils.secrets.get(scope="my_scope", key="sqlserver_jdbc_url")
-jdbc_user = dbutils.secrets.get(scope="my_scope", key="sqlserver_user")
-jdbc_password = dbutils.secrets.get(scope="my_scope", key="sqlserver_password")
+# JDBC connection details (replace with your actual values or widgets)
+db_url = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-url")
+db_user = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-user")
+db_password = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-password")
 
 source_query = "SELECT * FROM Production.Products"
 df_source = spark.read.format("jdbc") \
-    .option("url", jdbc_url) \
-    .option("user", jdbc_user) \
-    .option("password", jdbc_password) \
+    .option("url", db_url) \
+    .option("user", db_user) \
+    .option("password", db_password) \
     .option("dbtable", f"({source_query}) as src") \
     .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver") \
     .load()
 
 # 3. Transformations (Apply Logic)
-# -- No Lookups specified. No transformation logic specified in task. Pass-through.
-df_transformed = df_source
+# No lookups or additional transformations specified in the task.
+df_staged = df_source
 
-# 4. Lookup Logic (if any)
-# -- No lookups specified.
+# 3.1 Surrogate Key Generation (STABLE & IDEMPOTENT)
+# SAFE MIGRATION PATTERN: Lookup existing keys, generate new ones only for new members.
+target_table_name = "dbo.DimProduct"
+bk_cols = ["ProductID"]  # Assuming ProductID is the business key from source
+sk_col = "ProductKey"    # Surrogate Key for DimProduct
 
-# 5. Writing to Silver/Gold (Apply Platform Pattern)
-# -- SCD Type 2 not specified, so simple overwrite. If DimProduct has an identity column, handle surrogate key.
-# -- Enforce Unknown Member (-1) if table is a dimension.
+# 1. Get Existing Keys (Handle if table doesn't exist yet)
+try:
+    df_target = spark.read.table(target_table_name).select(*bk_cols, sk_col)
+    max_sk = df_target.agg(F.max(F.col(sk_col))).collect()[0][0] or 0
+except:
+    df_target = None
+    max_sk = 0
 
-target_table = "dbo.DimProduct"
-
-# -- Check if Unknown Member exists, if not, add it
-unknown_member = {
-    col: None for col in df_transformed.columns
-}
-if "ProductKey" in df_transformed.columns:
-    unknown_member["ProductKey"] = -1
+# 2. Join Source with Target to find existing SKs
+if df_target is not None:
+    df_joined = df_staged.join(df_target, on=bk_cols, how="left")
 else:
-    # If no ProductKey, add one
-    df_transformed = df_transformed.withColumn("ProductKey", monotonically_increasing_id())
-    unknown_member["ProductKey"] = -1
+    df_joined = df_staged.withColumn(sk_col, F.lit(None).cast("integer"))
 
-# Create DataFrame for Unknown Member
-df_unknown = spark.createDataFrame([unknown_member], df_transformed.schema)
+# 3. Generate Keys for New Rows ONLY
+window_spec = Window.orderBy(*bk_cols)
+df_existing = df_joined.filter(F.col(sk_col).isNotNull())
+df_new = df_joined.filter(F.col(sk_col).isNull()).drop(sk_col)
+df_new = df_new.withColumn(sk_col, F.row_number().over(window_spec) + max_sk)
+df_with_sk = df_existing.unionByName(df_new)
 
-# Union Unknown Member
-from pyspark.sql import DataFrame
-
-def ensure_unknown_member(df: DataFrame, key_col: str = "ProductKey") -> DataFrame:
-    if df.filter(col(key_col) == -1).count() == 0:
+# 3.2 Unknown Member Handling (For Dimensions)
+def ensure_unknown_member(df):
+    # Define the schema for the unknown member
+    unknown_dict = {col: -1 if dtype in ["int", "integer"] else None for col, dtype in zip(df.columns, [f.dataType.simpleString() for f in df.schema])}
+    unknown_dict[sk_col] = -1
+    unknown_dict[bk_cols[0]] = -1
+    unknown_row = [unknown_dict.get(col, None) for col in df.columns]
+    df_unknown = spark.createDataFrame([unknown_row], df.schema)
+    # Check if unknown exists
+    if df.filter(F.col(sk_col) == -1).count() == 0:
         return df.unionByName(df_unknown)
     else:
         return df
 
-df_final = ensure_unknown_member(df_transformed)
+df_final = ensure_unknown_member(df_with_sk)
 
-# -- Write to Delta (idempotent overwrite)
-df_final.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table)
+# 4. Mandatory Type Casting (STRICT)
+# Since target schema is not provided, we infer types from the DataFrame (should be replaced with explicit schema in production)
+for field in df_final.schema.fields:
+    col_name = field.name
+    target_type = field.dataType.simpleString()
+    df_final = df_final.withColumn(col_name, F.col(col_name).cast(target_type))
 
-# -- Optional: Optimize and Z-ORDER if ProductKey exists
-if "ProductKey" in df_final.columns:
-    spark.sql(f"OPTIMIZE {target_table} ZORDER BY (ProductKey)")
+# 5. Writing to Silver/Gold (Apply Platform Pattern)
+# Idempotent write using Delta Lake MERGE (SCD Type 1, as no SCD2 logic or hash diff is specified)
+delta_table_path = f"/mnt/delta/{target_table_name.replace('.', '/')}"
+
+try:
+    delta_table = DeltaTable.forPath(spark, delta_table_path)
+    # Merge on business key
+    delta_table.alias("target").merge(
+        df_final.alias("source"),
+        "target.ProductID = source.ProductID"
+    ).whenMatchedUpdateAll() \
+     .whenNotMatchedInsertAll() \
+     .execute()
+except Exception as e:
+    # Table does not exist, so create it
+    df_final.write.format("delta").mode("overwrite").save(delta_table_path)
+
+# Optional: Z-ORDER optimization on ProductID
+spark.sql(f"OPTIMIZE delta.`{delta_table_path}` ZORDER BY (ProductID)")

@@ -7,130 +7,124 @@
 from delta.tables import *
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
-
-# 2. Reading Bronze / Source
-# -- JDBC connection for parameterized query (supplierid > ?)
-# -- In Databricks, parameterization is handled by string formatting or pushing predicates
-# -- We'll assume the minimum supplierid is 0 for initial load (can be parameterized in production)
-
-jdbc_url = dbutils.secrets.get(scope="jdbc-secrets", key="supplier-db-url")
-jdbc_user = dbutils.secrets.get(scope="jdbc-secrets", key="supplier-db-user")
-jdbc_password = dbutils.secrets.get(scope="jdbc-secrets", key="supplier-db-password")
-
-supplier_query = '''(
-    SELECT supplierid, companyname, address, postalcode, phone, city, country
-    FROM Production.Suppliers
-    WHERE supplierid > 0
-) AS src'''
-
-df_source = (
-    spark.read.format("jdbc")
-    .option("url", jdbc_url)
-    .option("dbtable", supplier_query)
-    .option("user", jdbc_user)
-    .option("password", jdbc_password)
-    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
-    .load()
-)
-
-# 3. Transformations (Apply Logic)
-# -- Explicitly cast columns to match target schema (if known)
-# -- Since schema is not provided, we will infer types but enforce best practices
-# -- Assume supplierid is business key, and we need a surrogate key (SupplierKey)
-
-# Add SCD Type 2 columns
 from pyspark.sql.window import Window
 
-# Add surrogate key (SupplierKey) using row_number + max existing key
-# Read target table to get max SupplierKey
+# 2. Reading Bronze / Source
+# -- JDBC connection setup (parameters should be set via widgets or secrets)
+db_url = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-url")
+db_user = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-user")
+db_password = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-password")
+
+# The parameter for supplierid > ? should be provided as a widget or parameter
+supplierid_min = int(dbutils.widgets.get("supplierid_min"))
+source_query = f"""
+    SELECT supplierid, companyname, address, postalcode, phone, city, country
+    FROM Production.Suppliers
+    WHERE supplierid > {supplierid_min}
+"""
+
+df_source = spark.read.format("jdbc") \
+    .option("url", db_url) \
+    .option("user", db_user) \
+    .option("password", db_password) \
+    .option("dbtable", f"({source_query}) as src") \
+    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver") \
+    .load()
+
+# 3. Transformations (Apply Logic)
+# -- No lookups or additional transformations specified
+
+# 3.1 Surrogate Key Generation (STABLE & IDEMPOTENT)
+# SAFE MIGRATION PATTERN: Lookup existing keys, generate new ones only for new members.
+import pyspark.sql.functions as F
+
+target_table_name = "dbo.DimSupplier"
+bk_cols = ["supplierid"]
+sk_col = "SupplierKey"
+
+# 1. Get Existing Keys (Handle if table doesn't exist yet)
 try:
-    df_target = spark.read.table("dbo.DimSupplier")
-    max_key = df_target.agg(max(col("SupplierKey"))).collect()[0][0]
-    if max_key is None:
-        max_key = 0
-except Exception:
-    max_key = 0
+    df_target = spark.read.table(target_table_name).select(*bk_cols, sk_col)
+    max_sk = df_target.agg(F.max(F.col(sk_col))).collect()[0][0] or 0
+except:
+    df_target = None
+    max_sk = 0
 
-w = Window.orderBy(monotonically_increasing_id())
-df_with_sk = df_source.withColumn(
-    "SupplierKey", row_number().over(w) + max_key
-)
+# 2. Join Source with Target to find existing SKs
+if df_target is not None:
+    df_joined = df_source.join(df_target, on=bk_cols, how="left")
+else:
+    df_joined = df_source.withColumn(sk_col, F.lit(None).cast("integer"))
 
-# Add SCD2 columns
-from pyspark.sql.types import TimestampType
-from datetime import datetime
+# 3. Generate Keys for New Rows ONLY
+window_spec = Window.orderBy(*bk_cols)
+df_existing = df_joined.filter(F.col(sk_col).isNotNull())
+df_new = df_joined.filter(F.col(sk_col).isNull()).drop(sk_col)
+df_new = df_new.withColumn(sk_col, F.row_number().over(window_spec) + max_sk)
 
-current_ts = datetime.utcnow()
-df_final = (
-    df_with_sk
-    .withColumn("EffectiveDate", lit(current_ts).cast(TimestampType()))
-    .withColumn("EndDate", lit(None).cast(TimestampType()))
-    .withColumn("IsCurrent", lit(True))
-)
+# 4. Union
+from functools import reduce
+df_with_sk = df_existing.unionByName(df_new)
 
-# 4. Lookup Logic (none for this task)
+# 3.2 Unknown Member Handling (For Dimensions)
+def ensure_unknown_member(df):
+    # Define the schema for the unknown member
+    unknown_row = {
+        "SupplierKey": -1,
+        "supplierid": -1,
+        "companyname": "Unknown",
+        "address": "Unknown",
+        "postalcode": "Unknown",
+        "phone": "Unknown",
+        "city": "Unknown",
+        "country": "Unknown"
+    }
+    # Check if -1 exists
+    if df.filter(col("SupplierKey") == -1).count() == 0:
+        df_unknown = spark.createDataFrame([unknown_row], schema=df.schema)
+        df = df.unionByName(df_unknown)
+    return df
+
+df_with_sk = ensure_unknown_member(df_with_sk)
+
+# 4. Mandatory Type Casting (STRICT)
+# -- Target schema (STRICT):
+# SupplierKey: INTEGER (Surrogate Key)
+# supplierid: INTEGER
+# companyname: STRING
+# address: STRING
+# postalcode: STRING
+# phone: STRING
+# city: STRING
+# country: STRING
+
+target_schema = [
+    ("SupplierKey", "integer"),
+    ("supplierid", "integer"),
+    ("companyname", "string"),
+    ("address", "string"),
+    ("postalcode", "string"),
+    ("phone", "string"),
+    ("city", "string"),
+    ("country", "string")
+]
+
+df_final = df_with_sk
+for col_name, target_type in target_schema:
+    if col_name in df_final.columns:
+        df_final = df_final.withColumn(col_name, col(col_name).cast(target_type))
 
 # 5. Writing to Silver/Gold (Apply Platform Pattern)
-# -- SCD Type 2 via Delta Lake MERGE
-# -- Business key is supplierid
-# -- If record with same supplierid and changed attributes, expire old and insert new
-
-delta_table_name = "dbo.DimSupplier"
-
-# Ensure Unknown Member (-1) exists
-from pyspark.sql import Row
-unknown_row = Row(
-    SupplierKey=-1,
-    supplierid=-1,
-    companyname="Unknown",
-    address=None,
-    postalcode=None,
-    phone=None,
-    city=None,
-    country=None,
-    EffectiveDate=datetime(1900,1,1),
-    EndDate=None,
-    IsCurrent=True
+# -- Overwrite the target table (idempotent load for dimension)
+(
+    df_final
+    .select([name for name, _ in target_schema])
+    .write
+    .format("delta")
+    .mode("overwrite")
+    .option("overwriteSchema", "true")
+    .saveAsTable(target_table_name)
 )
 
-def ensure_unknown_member(delta_table_name):
-    try:
-        dt = DeltaTable.forName(spark, delta_table_name)
-        df = spark.read.table(delta_table_name)
-        if df.filter(col("SupplierKey") == -1).count() == 0:
-            spark.createDataFrame([unknown_row]).write.format("delta").mode("append").saveAsTable(delta_table_name)
-    except Exception:
-        # Table does not exist, create with unknown member
-        spark.createDataFrame([unknown_row]).write.format("delta").mode("overwrite").saveAsTable(delta_table_name)
-
-ensure_unknown_member(delta_table_name)
-
-# Prepare staged updates
-staged_updates = df_final.select(
-    "SupplierKey", "supplierid", "companyname", "address", "postalcode", "phone", "city", "country", "EffectiveDate", "EndDate", "IsCurrent"
-)
-
-# SCD2 Merge
-merge_sql = f'''
-MERGE INTO {delta_table_name} AS target
-USING staged_updates AS source
-ON target.supplierid = source.supplierid AND target.IsCurrent = true
-WHEN MATCHED AND (
-    target.companyname <> source.companyname OR
-    target.address <> source.address OR
-    target.postalcode <> source.postalcode OR
-    target.phone <> source.phone OR
-    target.city <> source.city OR
-    target.country <> source.country
-) THEN
-  UPDATE SET target.EndDate = source.EffectiveDate, target.IsCurrent = false
-WHEN NOT MATCHED BY TARGET THEN
-  INSERT (SupplierKey, supplierid, companyname, address, postalcode, phone, city, country, EffectiveDate, EndDate, IsCurrent)
-  VALUES (source.SupplierKey, source.supplierid, source.companyname, source.address, source.postalcode, source.phone, source.city, source.country, source.EffectiveDate, source.EndDate, source.IsCurrent)
-'''
-
-staged_updates.createOrReplaceTempView("staged_updates")
-spark.sql(merge_sql)
-
-# Optional: Z-ORDER on supplierid for optimization
-spark.sql(f"OPTIMIZE {delta_table_name} ZORDER BY (supplierid)")
+# Optional: Z-ORDER optimization on SupplierKey (high-cardinality BK)
+spark.sql(f"OPTIMIZE {target_table_name} ZORDER BY (supplierid)")

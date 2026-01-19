@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Upload, Github, FolderPlus, X, Trash2 } from "lucide-react";
+import { Upload, Github, FolderPlus, X, Trash2, RefreshCw } from "lucide-react";
 
 export default function Dashboard() {
     const [projects, setProjects] = useState<any[]>([]);
@@ -137,41 +137,70 @@ export default function Dashboard() {
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in slide-in-from-bottom-4">
-                        {projects.map((p) => (
-                            <div key={p.id} className="group bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 hover:border-primary/50 hover:shadow-xl transition-all h-full flex flex-col justify-between overflow-hidden">
-                                <Link href={`/workspace/${p.id}`} className="block p-6 flex-grow">
-                                    <div className="flex justify-between items-start mb-4">
-                                        <span className="text-gray-400 text-xs font-mono uppercase tracking-wider">{p.origin}</span>
-                                        <div className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase border ${getStageColor(p.stage)}`}>
-                                            {p.stage}
-                                        </div>
-                                    </div>
-                                    <h3 className="text-xl font-bold mb-2 group-hover:text-primary transition-colors">{p.name}</h3>
-                                    <div className="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-2 mb-4 overflow-hidden">
-                                        <div className="bg-primary h-full rounded-full transition-all duration-1000" style={{ width: `${p.progress}%` }}></div>
-                                    </div>
-                                </Link>
+                        {projects.map((p) => {
+                            // Mappings
+                            const stageMap: { [key: string]: string } = { "1": "TRIAGE", "2": "DRAFTING", "3": "REFINEMENT", "4": "GOVERNANCE" };
+                            const displayStage = stageMap[p.stage.toString()] || p.stage;
 
-                                <div className="flex justify-between items-end border-t border-gray-100 dark:border-gray-800 px-6 py-4 bg-gray-50/50 dark:bg-gray-800/20">
-                                    <div className="text-xs text-gray-500">
-                                        <span className="block font-bold text-lg text-gray-900 dark:text-white">{p.progress}%</span>
-                                        Completado
-                                    </div>
-                                    {p.alerts > 0 && (
-                                        <div className="flex items-center gap-1 text-xs text-orange-500 bg-orange-50 dark:bg-orange-900/20 px-2 py-1 rounded-md">
-                                            <span>⚠️</span> {p.alerts} Alertas
+                            const originMap: { [key: string]: string } = { "zip": "Local ZIP", "github": "GitHub" };
+                            const displayOrigin = originMap[p.origin] || (p.origin === "Unknown" ? "" : p.origin);
+
+                            return (
+                                <div key={p.id} className="group bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 hover:border-primary/50 hover:shadow-xl transition-all h-full flex flex-col justify-between overflow-hidden">
+                                    <Link href={`/workspace/${p.id}`} className="block p-6 flex-grow">
+                                        <div className="flex justify-between items-start mb-4">
+                                            <span className="text-gray-400 text-xs font-mono uppercase tracking-wider flex items-center gap-1">
+                                                {displayOrigin === "GitHub" && <Github size={12} />}
+                                                {displayOrigin === "Local ZIP" && <FolderPlus size={12} />}
+                                                {displayOrigin}
+                                            </span>
+                                            <div className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase border ${getStageColor(displayStage)}`}>
+                                                {displayStage}
+                                            </div>
                                         </div>
-                                    )}
-                                    <button
-                                        onClick={(e) => handleDeleteProject(e, p.id)}
-                                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors z-10"
-                                        title="Eliminar Solución"
-                                    >
-                                        <Trash2 size={16} />
-                                    </button>
+                                        <h3 className="text-xl font-bold mb-2 group-hover:text-primary transition-colors">{p.name}</h3>
+                                        <div className="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-2 mb-4 overflow-hidden">
+                                            <div className="bg-primary h-full rounded-full transition-all duration-1000" style={{ width: `${p.progress}%` }}></div>
+                                        </div>
+                                    </Link>
+
+                                    <div className="flex justify-between items-center border-t border-gray-100 dark:border-gray-800 px-6 py-4 bg-gray-50/50 dark:bg-gray-800/20">
+                                        <div className="text-xs text-gray-500">
+                                            <span className="block font-bold text-lg text-gray-900 dark:text-white">
+                                                {p.assets_count !== undefined ? p.assets_count : p.progress + "%"}
+                                            </span>
+                                            {p.assets_count !== undefined ? "Paques / Assets" : "Completado"}
+                                        </div>
+
+                                        <div className="flex items-center gap-2">
+                                            {/* Reset Button (Only if NOT in Stage 1/Triage) */}
+                                            {p.stage > 1 && (
+                                                <button
+                                                    onClick={async (e) => {
+                                                        e.preventDefault();
+                                                        if (!confirm("¿Resetear proyecto a etapa TRIAGE? Se perderá el progreso.")) return;
+                                                        await fetch(`http://localhost:8000/projects/${p.id}/reset`, { method: "POST" });
+                                                        window.location.reload(); // Simple reload to refresh state
+                                                    }}
+                                                    className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors z-10"
+                                                    title="Reiniciar a Triage (Rollback)"
+                                                >
+                                                    <RefreshCw size={16} /> {/* Using Refresh as Reset icon */}
+                                                </button>
+                                            )}
+
+                                            <button
+                                                onClick={(e) => handleDeleteProject(e, p.id)}
+                                                className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors z-10"
+                                                title="Eliminar Solución"
+                                            >
+                                                <Trash2 size={16} />
+                                            </button>
+                                        </div>
+                                    </div>
                                 </div>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 )}
 

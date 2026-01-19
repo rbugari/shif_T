@@ -1,25 +1,6 @@
 {
-  "status": "REJECTED",
-  "score": 70,
-  "violations": [
-    {
-      "severity": "CRITICAL",
-      "rule": "Identity/Surrogate Keys",
-      "description": "The code generates surrogate keys using row_number() over a window ordered by monotonically_increasing_id(). This does not guarantee deterministic or stable key assignment across runs, violating idempotency and identity rules. The platform requires resetting the sequence to MAX(id) + 1 and using a deterministic order (e.g., business key).",
-      "suggestion": "Order the window by a stable, unique business key (e.g., CustId) instead of monotonically_increasing_id()."
-    },
-    {
-      "severity": "WARNING",
-      "rule": "Idempotency",
-      "description": "The code uses .mode('overwrite') which is acceptable for initial loads, but for incremental loads, a MERGE pattern is required. The comment acknowledges this, but the code does not enforce idempotency for future incremental runs.",
-      "suggestion": "For incremental loads, implement a Delta Lake MERGE statement keyed on the business key (CustId)."
-    },
-    {
-      "severity": "WARNING",
-      "rule": "Type Safety",
-      "description": "The code infers types from the source and casts explicitly, which is good. However, it does not handle possible nulls in CustId, which could cause issues if the source data is dirty.",
-      "suggestion": "Add a .na.fill({'CustId': -1}) before casting, or coalesce CustId to -1 to enforce referential integrity."
-    }
-  ],
-  "fixed_code": "# 4. Identity/Surrogate Key Logic (Corrected)\n# -- Use deterministic ordering for surrogate key assignment\nfrom pyspark.sql.window import Window\n\n# Ensure CustId is not null for ordering\nfrom pyspark.sql.functions import coalesce\n\ndf_typed = df_typed.withColumn('CustId', coalesce(col('CustId'), lit(-1)))\n\nwindowSpec = Window.orderBy(col('CustId'))\ndf_final = (\n    df_typed\n    .withColumn(\n        'CustomerKey',\n        row_number().over(windowSpec) + max_id\n    )\n)\n# The rest of the code remains unchanged."
+  "status": "APPROVED",
+  "score": 100,
+  "violations": [],
+  "fixed_code": null
 }

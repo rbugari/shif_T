@@ -15,13 +15,37 @@ interface FileNode {
 interface DraftingViewProps {
     projectId: string;
     onStageChange: (stage: number) => void;
+    onCompletion?: (completed: boolean) => void;
 }
 
-export default function DraftingView({ projectId, onStageChange }: DraftingViewProps) {
+export default function DraftingView({ projectId, onStageChange, onCompletion }: DraftingViewProps) {
     const [activeTab, setActiveTab] = useState<"execution" | "prompts" | "files">("execution");
     const [isRunning, setIsRunning] = useState(false);
     const [logs, setLogs] = useState<string[]>([]); // Simple log stream simulation
     const [progress, setProgress] = useState(0);
+
+    // Load logs on mount
+    useEffect(() => {
+        const fetchLogs = async () => {
+            try {
+                const res = await fetch(`${API_BASE_URL}/projects/${projectId}/logs`);
+                const data = await res.json();
+                if (data.logs) {
+                    const logLines = data.logs.split("\n").filter((l: string) => l.trim() !== "");
+                    setLogs(logLines);
+
+                    // Check for completion
+                    if (data.logs.includes("Migration Complete.")) {
+                        setProgress(100);
+                        if (onCompletion) onCompletion(true);
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to load logs", e);
+            }
+        };
+        fetchLogs();
+    }, [projectId]);
 
     // --- Tab 1: Execution Handlers ---
     const handleRunMigration = async () => {
@@ -49,11 +73,28 @@ export default function DraftingView({ projectId, onStageChange }: DraftingViewP
                     "Migration Complete."
                 ]);
                 setProgress(100);
+                if (onCompletion) onCompletion(true);
             }
         } catch (e) {
             setLogs(prev => [...prev, `[Network Error] ${e}`]);
         } finally {
             setIsRunning(false);
+        }
+    };
+
+    const handleApprove = async () => {
+        try {
+            const res = await fetch(`${API_BASE_URL}/projects/${projectId}/stage`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ stage: "3" })
+            });
+            const data = await res.json();
+            if (data.success) {
+                onStageChange(3);
+            }
+        } catch (e) {
+            console.error("Failed to update stage", e);
         }
     };
 
@@ -89,6 +130,7 @@ export default function DraftingView({ projectId, onStageChange }: DraftingViewP
                         logs={logs}
                         progress={progress}
                         onRun={handleRunMigration}
+                        onApprove={handleApprove}
                     />
                 )}
                 {activeTab === "prompts" && <PromptsTab />}
@@ -114,7 +156,7 @@ function TabButton({ active, onClick, icon, label }: any) {
     );
 }
 
-function ExecutionTab({ isRunning, logs, progress, onRun }: any) {
+function ExecutionTab({ isRunning, logs, progress, onRun, onApprove }: any) {
     return (
         <div className="h-full flex flex-col gap-6 max-w-4xl mx-auto">
             {/* Control Panel */}
@@ -123,14 +165,24 @@ function ExecutionTab({ isRunning, logs, progress, onRun }: any) {
                     <h2 className="text-xl font-bold flex items-center gap-2"><Play className="text-primary" /> Start Migration</h2>
                     <p className="text-gray-500 text-sm mt-1">Execute the full pipeline: Librarian → Topology → Developer → Compliance.</p>
                 </div>
-                <button
-                    onClick={onRun}
-                    disabled={isRunning}
-                    className={`px-6 py-3 rounded-lg font-bold text-white shadow-lg transition-all ${isRunning ? "bg-gray-400 cursor-not-allowed" : "bg-primary hover:bg-primary/90 hover:scale-105"
-                        }`}
-                >
-                    {isRunning ? "Running..." : "Execute Pipeline"}
-                </button>
+                <div className="flex items-center gap-3">
+                    {progress === 100 && (
+                        <button
+                            onClick={onApprove}
+                            className="px-6 py-3 rounded-lg font-bold text-primary border border-primary hover:bg-primary/10 transition-all flex items-center gap-2"
+                        >
+                            <CheckCircle size={18} /> Approve & Refine
+                        </button>
+                    )}
+                    <button
+                        onClick={onRun}
+                        disabled={isRunning}
+                        className={`px-6 py-3 rounded-lg font-bold text-white shadow-lg transition-all ${isRunning ? "bg-gray-400 cursor-not-allowed" : "bg-primary hover:bg-primary/90 hover:scale-105"
+                            }`}
+                    >
+                        {isRunning ? "Running..." : "Execute Pipeline"}
+                    </button>
+                </div>
             </div>
 
             {/* Console Output */}

@@ -7,14 +7,16 @@
 from delta.tables import *
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
+from pyspark.sql.window import Window
+import pyspark.sql.functions as F
 
 # 2. Reading Bronze / Source
-# Input 1: Complex SQL Query from Sales.orders, Sales.OrderDetails, Production.Products
-import dbutils
+# NOTE: No target schema provided. Skipping type enforcement and surrogate key logic.
 
-db_url = dbutils.secrets.get(scope="jdbc-secrets", key="dw-url")
-db_user = dbutils.secrets.get(scope="jdbc-secrets", key="dw-user")
-db_password = dbutils.secrets.get(scope="jdbc-secrets", key="dw-password")
+# --- Input 1: Orders + OrderDetails + Products ---
+db_url = dbutils.secrets.get(scope="jdbc", key="dw_url")
+db_user = dbutils.secrets.get(scope="jdbc", key="dw_user")
+db_password = dbutils.secrets.get(scope="jdbc", key="dw_password")
 
 sql_query_1 = '''select O.orderid,O.custid,O.empid,O.shipperid,P.categoryid,P.supplierid,OD.qty,OD.unitprice,OD.discount,OD.productid from Sales.orders O 
  INNER JOIN Sales.OrderDetails OD
@@ -27,47 +29,34 @@ df_orders = spark.read.format("jdbc") \
     .option("user", db_user) \
     .option("password", db_password) \
     .option("dbtable", f"({sql_query_1}) as src") \
+    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver") \
     .load()
 
-# Input 2: tempStage joined with dw..V_DimProduct
+# --- Input 2: tempStage joined with V_DimProduct ---
 sql_query_2 = '''SELECT T.* 
 FROM tempStage T 
 INNER JOIN dw..V_DimProduct P 
 ON P.productid = T.productid'''
 
-df_tempStage = spark.read.format("jdbc") \
+df_tempstage = spark.read.format("jdbc") \
     .option("url", db_url) \
     .option("user", db_user) \
     .option("password", db_password) \
     .option("dbtable", f"({sql_query_2}) as src") \
+    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver") \
     .load()
 
 # 3. Transformations (Apply Logic)
-# NOTE: No explicit transformation logic provided in the task description.
-# If any business logic is required, inject here.
+# No transformation logic specified in task definition.
 
-# 4. Lookup Logic (if any)
-# No lookups specified in the task definition.
+# 4. Writing to Silver/Gold (Apply Platform Pattern)
+# Output: [FactSales], [tempStage]
+# Since no SCD or surrogate key logic is specified and no schema is provided, we will overwrite the tables.
 
-# 5. Writing to Silver/Gold (Apply Platform Pattern)
-# Output 1: [FactSales]
-# Output 2: [tempStage]
+# Write FactSales
+# (Assume catalog and schema are set in Spark session)
+df_orders.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable("FactSales")
 
-# Since no SCD or identity logic is specified for FactSales, perform an overwrite (idempotent load)
-# If FactSales is a fact table, we assume no surrogate key is required unless specified in schema.
-
-df_fact_sales = df_orders
-
-df_fact_sales.write.format("delta") \
-    .mode("overwrite") \
-    .option("overwriteSchema", "true") \
-    .saveAsTable("FactSales")
-
-# For tempStage, overwrite as well (staging table)
-df_tempStage.write.format("delta") \
-    .mode("overwrite") \
-    .option("overwriteSchema", "true") \
-    .saveAsTable("tempStage")
-
-# Optimization (if required by platform rules)
-# No explicit business key provided, so Z-ORDER is not applied here.
+# Write tempStage
+# (Assume catalog and schema are set in Spark session)
+df_tempstage.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable("tempStage")
