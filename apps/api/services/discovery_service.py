@@ -18,11 +18,23 @@ class DiscoveryService:
         inventory = []
         tech_counts = {}
         
-        # 1. Deep Scan
-        for root, dirs, files in os.walk(project_path):
+        # 1. Deep Scan - RESTRICTED TO TRIAGE/SOURCE FOLDER
+        triage_path = os.path.join(project_path, PersistenceService.STAGE_TRIAGE)
+        print(f"DEBUG: Scanning strictly: {triage_path}")
+        
+        if not os.path.exists(triage_path):
+             print(f"DEBUG: Triage folder NOT found at {triage_path}. Returning empty.")
+             # DO NOT FALLBACK to root. Return empty or create it?
+             # Better to return empty than junk.
+             pass 
+
+        for root, dirs, files in os.walk(triage_path):
             if '.git' in dirs: dirs.remove('.git')
             if '__pycache__' in dirs: dirs.remove('__pycache__')
-            
+            # Exclude other stage folders if we fell back to root, or just to be safe
+            if PersistenceService.STAGE_DRAFTING in dirs: dirs.remove(PersistenceService.STAGE_DRAFTING)
+            if PersistenceService.STAGE_REFINEMENT in dirs: dirs.remove(PersistenceService.STAGE_REFINEMENT)
+
             for file in files:
                 full_path = os.path.join(root, file)
                 rel_path = os.path.relpath(full_path, project_path).replace("\\", "/")
@@ -34,6 +46,8 @@ class DiscoveryService:
                 # Deep Content Analysis
                 analysis = DiscoveryService._analyze_file_content(full_path, ext)
                 
+                print(f"DEBUG_SCAN: Adding file {rel_path} (Type: {ext})")  # <--- DEBUG PRINT
+
                 inventory.append({
                     "path": rel_path,
                     "name": file,
@@ -44,6 +58,8 @@ class DiscoveryService:
                     "snippet": analysis["snippet"], # First N chars or relevant lines
                     "metadata": analysis.get("metadata", {})
                 })
+        
+        print(f"DEBUG_SCAN: Total files found in inventory: {len(inventory)}") # <--- DEBUG PRINT
 
         # 2. Construct Manifest
         return {

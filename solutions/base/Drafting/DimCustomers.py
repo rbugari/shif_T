@@ -8,38 +8,35 @@ from delta.tables import *
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from pyspark.sql.window import Window
-import pyspark.sql.functions as F
 
 # 2. Reading Bronze / Source
-# -- JDBC connection details (replace with your actual secret scope/keys)
+# JDBC connection details (use dbutils.secrets for credentials)
 db_url = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-url")
 db_user = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-user")
 db_password = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-password")
 
-# -- Parameter for the WHERE clause (custid > ?)
-custid_min = dbutils.widgets.get("custid_min") if dbutils.widgets.get("custid_min", None) else "0"
+# Parameter for custid threshold (replace with widget or parameter as needed)
+custid_threshold = dbutils.widgets.get("custid_threshold") if dbutils.widgets.get("custid_threshold", None) else 0
 
-sql_query = f"""
+source_query = f"""
 SELECT custid, contactname, city, country, address, phone, postalcode
 FROM Sales.Customers
-WHERE custid > {custid_min}
+WHERE custid > {custid_threshold}
 """
 
-df_source = (
+# Read source data explicitly via JDBC
+source_df = (
     spark.read.format("jdbc")
     .option("url", db_url)
     .option("user", db_user)
     .option("password", db_password)
-    .option("dbtable", f"({sql_query}) as src")
+    .option("dbtable", f"({source_query}) as src")
     .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
     .load()
 )
 
 # 3. Transformations (Apply Logic)
-# -- Map source columns to target columns (assuming 1:1 mapping)
-# -- If target schema is not provided, we infer reasonable types and names
-# -- Target Table: DimCustomer
-# -- Columns: CustomerKey (SK), CustomerAlternateKey (BK), ContactName, City, Country, Address, Phone, PostalCode
+# No lookups specified. Direct mapping.
 
 # 3.1 Surrogate Key Generation (STABLE & IDEMPOTENT)
 # SAFE MIGRATION PATTERN: Lookup existing keys, generate new ones only for new members.
@@ -50,26 +47,25 @@ sk_col = "CustomerKey"
 # 1. Get Existing Keys (Handle if table doesn't exist yet)
 try:
     df_target = spark.read.table(target_table_name).select(*bk_cols, sk_col)
-    max_sk = df_target.agg(F.max(F.col(sk_col))).collect()[0][0] or 0
-except:
+    max_sk = df_target.agg(max(col(sk_col))).collect()[0][0] or 0
+except Exception:
     df_target = None
     max_sk = 0
 
 # 2. Join Source with Target to find existing SKs
 if df_target is not None:
-    df_joined = df_source.join(df_target, on=bk_cols, how="left")
+    df_joined = source_df.join(df_target, on=bk_cols, how="left")
 else:
-    df_joined = df_source.withColumn(sk_col, F.lit(None).cast("integer"))
+    df_joined = source_df.withColumn(sk_col, lit(None).cast("integer"))
 
 # 3. Generate Keys for New Rows ONLY
 window_spec = Window.orderBy(*bk_cols)
-df_existing = df_joined.filter(F.col(sk_col).isNotNull())
-df_new = df_joined.filter(F.col(sk_col).isNull()).drop(sk_col)
-df_new = df_new.withColumn(sk_col, F.row_number().over(window_spec) + max_sk)
+df_existing = df_joined.filter(col(sk_col).isNotNull())
+df_new = df_joined.filter(col(sk_col).isNull()).drop(sk_col)
+df_new = df_new.withColumn(sk_col, row_number().over(window_spec) + max_sk)
 
 # 4. Union
-from functools import reduce
-df_with_sk = df_existing.unionByName(df_new)
+customer_df = df_existing.unionByName(df_new)
 
 # 3.2 Unknown Member Handling (For Dimensions)
 def ensure_unknown_member(df):
@@ -84,36 +80,45 @@ def ensure_unknown_member(df):
         "phone": "Unknown",
         "postalcode": "Unknown"
     }
-    # Check if unknown exists
+    # Check if unknown member exists
     if df.filter(col("CustomerKey") == -1).count() == 0:
-        df_unknown = spark.createDataFrame([unknown_row], schema=df.schema)
-        df = df.unionByName(df_unknown)
+        unknown_df = spark.createDataFrame([unknown_row], df.schema)
+        df = df.unionByName(unknown_df)
     return df
 
-df_with_sk = ensure_unknown_member(df_with_sk)
+customer_df = ensure_unknown_member(customer_df)
 
 # 4. Mandatory Type Casting (STRICT)
-# -- Define target schema explicitly (as not provided)
+# Define target schema types explicitly (example, adjust as per actual schema)
 target_schema = [
-    StructField("CustomerKey", IntegerType(), False),
-    StructField("custid", IntegerType(), False),
-    StructField("contactname", StringType(), True),
-    StructField("city", StringType(), True),
-    StructField("country", StringType(), True),
-    StructField("address", StringType(), True),
-    StructField("phone", StringType(), True),
-    StructField("postalcode", StringType(), True)
+    {"name": "CustomerKey", "type": "INTEGER"},
+    {"name": "custid", "type": "INTEGER"},
+    {"name": "contactname", "type": "STRING"},
+    {"name": "city", "type": "STRING"},
+    {"name": "country", "type": "STRING"},
+    {"name": "address", "type": "STRING"},
+    {"name": "phone", "type": "STRING"},
+    {"name": "postalcode", "type": "STRING"}
 ]
 
 for field in target_schema:
-    col_name = field.name
-    target_type = field.dataType.simpleString()
-    if col_name in df_with_sk.columns:
-        df_with_sk = df_with_sk.withColumn(col_name, col(col_name).cast(target_type))
+    col_name = field["name"]
+    target_type = field["type"]
+    if col_name in customer_df.columns:
+        customer_df = customer_df.withColumn(col_name, col(col_name).cast(target_type))
 
 # 5. Writing to Silver/Gold (Apply Platform Pattern)
-# -- Overwrite the table (idempotent load)
-df_with_sk.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table_name)
+# Overwrite/merge logic for dimension table
+# Use Delta Lake MERGE for idempotency
 
-# 6. Optimization (Z-ORDER on Business Key)
-spark.sql(f"OPTIMIZE {target_table_name} ZORDER BY (custid)")
+delta_target = DeltaTable.forName(spark, target_table_name)
+
+# Prepare staged DataFrame for merge
+staged_df = customer_df
+
+# Merge logic: Insert new, update existing
+# For simple dimension, match on Business Key (custid)
+delta_target.alias("target").merge(
+    staged_df.alias("stage"),
+    "target.custid = stage.custid"
+).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()

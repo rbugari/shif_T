@@ -10,99 +10,100 @@ from pyspark.sql.types import *
 from pyspark.sql.window import Window
 
 # 2. Reading Bronze / Source
-# -- Platform Rule: Use explicit JDBC connection for QUERY inputs
-# -- NOTE: Replace <jdbc_url>, <username_key>, <password_key> with actual secret scope/keys
+# Extract JDBC connection details securely
+jdbc_url = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-url")
+jdbc_user = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-user")
+jdbc_password = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-password")
 
-db_url = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-url")
-db_user = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-user")
-db_password = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-password")
+# Parameter for shipperid threshold (replace with widget or parameter as needed)
+shipperid_threshold = dbutils.widgets.get("shipperid_threshold")
 
-# The parameter for shipperid > ? is assumed to be 0 for full load (adjust as needed)
-source_query = "SELECT * FROM Sales.Shippers WHERE shipperid > 0"
-df_source = spark.read.format("jdbc") \
-    .option("url", db_url) \
-    .option("dbtable", f"({source_query}) as src") \
-    .option("user", db_user) \
-    .option("password", db_password) \
-    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver") \
+# Build parameterized query
+source_query = f"SELECT * FROM Sales.Shippers WHERE shipperid > {shipperid_threshold}"
+
+# Read source data explicitly via JDBC
+source_df = (
+    spark.read.format("jdbc")
+    .option("url", jdbc_url)
+    .option("user", jdbc_user)
+    .option("password", jdbc_password)
+    .option("dbtable", f"({source_query}) as src")
+    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
     .load()
+)
 
 # 3. Transformations (Apply Logic)
-# No lookups or additional transformations specified.
+# No lookups or complex logic specified. Direct mapping.
+df_staged = source_df
 
 # 3.1 Surrogate Key Generation (STABLE & IDEMPOTENT)
 # SAFE MIGRATION PATTERN: Lookup existing keys, generate new ones only for new members.
-import pyspark.sql.functions as F
-
 target_table_name = "DimShipper"
-bk_cols = ["shipperid"]  # Assuming shipperid is the business key
-sk_col = "ShipperKey"    # Surrogate key for dimension
+bk_cols = ["shipperid"]  # Business Key
+sk_col = "DimShipperID"  # Surrogate Key (assumed name)
 
 # 1. Get Existing Keys (Handle if table doesn't exist yet)
 try:
     df_target = spark.read.table(target_table_name).select(*bk_cols, sk_col)
-    max_sk = df_target.agg(F.max(F.col(sk_col))).collect()[0][0] or 0
+    max_sk = df_target.agg(max(col(sk_col))).collect()[0][0] or 0
 except Exception:
     df_target = None
     max_sk = 0
 
 # 2. Join Source with Target to find existing SKs
 if df_target is not None:
-    df_joined = df_source.join(df_target, on=bk_cols, how="left")
+    df_joined = df_staged.join(df_target, on=bk_cols, how="left")
 else:
-    df_joined = df_source.withColumn(sk_col, F.lit(None).cast("integer"))
+    df_joined = df_staged.withColumn(sk_col, lit(None).cast("integer"))
 
 # 3. Generate Keys for New Rows ONLY
 window_spec = Window.orderBy(*bk_cols)
-df_existing = df_joined.filter(F.col(sk_col).isNotNull())
-df_new = df_joined.filter(F.col(sk_col).isNull()).drop(sk_col)
-df_new = df_new.withColumn(sk_col, F.row_number().over(window_spec) + max_sk)
+df_existing = df_joined.filter(col(sk_col).isNotNull())
+df_new = df_joined.filter(col(sk_col).isNull()).drop(sk_col)
+df_new = df_new.withColumn(sk_col, row_number().over(window_spec) + max_sk)
 
 # 4. Union
-from functools import reduce
-df_with_sk = df_existing.unionByName(df_new)
+final_df = df_existing.unionByName(df_new)
 
 # 3.2 Unknown Member Handling (For Dimensions)
 def ensure_unknown_member(df):
     # Define the schema for the unknown member
     unknown_row = {
-        "ShipperKey": -1,
         "shipperid": -1,
         "companyname": "Unknown",
-        "phone": None
+        "phone": "Unknown",
+        sk_col: -1
     }
     # Check if unknown member exists
-    if df.filter(col("ShipperKey") == -1).count() == 0:
+    if df.filter(col("shipperid") == -1).count() == 0:
         unknown_df = spark.createDataFrame([unknown_row], schema=df.schema)
         df = df.unionByName(unknown_df)
     return df
 
-df_with_sk = ensure_unknown_member(df_with_sk)
+final_df = ensure_unknown_member(final_df)
 
 # 4. Mandatory Type Casting (STRICT)
-# -- Target schema is not provided, so we infer from source and platform rules
-# -- For demonstration, we assume the following schema:
-#   ShipperKey: INTEGER (Surrogate Key)
-#   shipperid: INTEGER
-#   companyname: STRING
-#   phone: STRING
-
+# Define target schema explicitly (example, adjust as per actual schema)
 target_schema = [
-    {"name": "ShipperKey", "type": "INTEGER"},
+    {"name": "DimShipperID", "type": "INTEGER"},
     {"name": "shipperid", "type": "INTEGER"},
     {"name": "companyname", "type": "STRING"},
     {"name": "phone", "type": "STRING"}
 ]
-
 for field in target_schema:
     col_name = field["name"]
     target_type = field["type"]
-    if col_name in df_with_sk.columns:
-        df_with_sk = df_with_sk.withColumn(col_name, col(col_name).cast(target_type))
+    if col_name in final_df.columns:
+        final_df = final_df.withColumn(col_name, col(col_name).cast(target_type))
 
 # 5. Writing to Silver/Gold (Apply Platform Pattern)
-# -- Idempotent overwrite (no SCD logic required for static dimension)
-df_with_sk.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table_name)
+# Overwrite/merge logic for idempotency
+# Delta Lake MERGE pattern (SCD Type 1 for dimension, as no history columns specified)
+delta_table = DeltaTable.forName(spark, target_table_name)
+delta_table.alias("target").merge(
+    final_df.alias("source"),
+    "target.shipperid = source.shipperid"
+).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
 
-# 6. Optimization (Z-ORDER on business key)
+# Optimization: Z-ORDER on business key
 spark.sql(f"OPTIMIZE {target_table_name} ZORDER BY (shipperid)")

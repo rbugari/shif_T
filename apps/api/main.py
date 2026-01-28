@@ -15,7 +15,11 @@ from services.agent_g_service import AgentGService
 from services.persistence_service import PersistenceService, SupabasePersistence
 from services.discovery_service import DiscoveryService
 from services.refinement.governance_service import GovernanceService
+from services.report_service import ReportService
 from supabase import create_client, Client
+import io
+import datetime
+import uuid
 
 load_dotenv()
 
@@ -371,11 +375,17 @@ async def run_triage(project_id: str, params: TriageParams):
             "filename": item["name"],
             "type": category,
             "source_path": item["path"],
-            "metadata": item.get("metadata", {}),
             # Important: Select any asset that is not IGNORED (matches graph eligibility)
             "selected": True if category != "IGNORED" else False
         })
     
+    # Clean up old assets before saving new ones to prevent accumulation/duplicates
+    # Inlining the delete to avoid AttributeError if server didn't reload PersistenceService
+    try:
+        db.client.table("assets").delete().eq("project_id", project_uuid).execute()
+    except Exception as e:
+        print(f"Warning: Failed to clean assets: {e}")
+
     saved_assets = await db.batch_save_assets(project_uuid, db_assets)
     # Create lookup map for UUIDs: source_path -> id
     asset_map = { a["source_path"]: a["id"] for a in saved_assets }
@@ -784,6 +794,53 @@ async def export_project(project_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def is_valid_uuid(val):
+    try:
+        uuid.UUID(str(val))
+        return True
+    except ValueError:
+        return False
+
+@app.get("/projects/{project_id}/triage/report")
+async def download_triage_report(project_id: str):
+    """Generates and downloads a PDF report for the Triage stage."""
+    project_uuid = project_id if is_valid_uuid(project_id) else "34dcb9bd-03bc-4cad-906c-e5f348f50cb9"
+    db = SupabasePersistence()
+
+    # Get Metadata
+    meta = await db.get_project_metadata(project_uuid)
+    
+    # Get Assets
+    assets = await db.get_project_assets(project_uuid)
+    
+    report_data = {
+        "name": meta.get("name", "Unknown") if meta else project_id,
+        "generated_at": datetime.datetime.now().isoformat(),
+        "assets": assets,
+        "summary": {} # Add summary metrics if available
+    }
+    
+    pdf_bytes = ReportService.generate_triage_pdf(report_data)
+    project_name = meta.get("name", project_id) if meta else project_id
+    safe_name = "".join([c for c in project_name if c.isalnum() or c in (' ', '-', '_')]).strip()
+    filename = f"Triaje_{safe_name}.pdf"
+    
+    # [NEW] Persist the report to the solution directory
+    try:
+        saved_path = PersistenceService.save_report_pdf(project_name, filename, pdf_bytes)
+        print(f"Report saved to: {saved_path}")
+    except Exception as e:
+        print(f"Error saving report to disk: {e}")
+    
+    import urllib.parse
+    encoded_filename = urllib.parse.quote(filename)
+    
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes), 
+        media_type="application/pdf", 
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}; filename=\"{filename}\""}
+    )
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8002)

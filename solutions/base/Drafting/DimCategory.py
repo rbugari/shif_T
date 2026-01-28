@@ -10,36 +10,31 @@ from pyspark.sql.types import *
 from pyspark.sql.window import Window
 
 # 2. Reading Bronze / Source
-# -- JDBC connection details (parameterized, never hardcoded)
-db_url = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-url")
-db_user = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-user")
-db_password = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-password")
+# JDBC connection details (use dbutils.secrets for credentials)
+db_url = dbutils.secrets.get(scope="jdbc-secrets", key="prod-url")
+db_user = dbutils.secrets.get(scope="jdbc-secrets", key="prod-user")
+db_password = dbutils.secrets.get(scope="jdbc-secrets", key="prod-password")
 
-# -- Parameter for categoryid > ? (set via widget or parameter)
-categoryid_min = int(dbutils.widgets.get("categoryid_min"))
+# SSIS query: SELECT categoryid,categoryname FROM Production.Categories WHERE categoryid > ?
+# For migration, parameterize the value (e.g., categoryid > 0)
+categoryid_min = 0  # Replace with widget/parameter if needed
+sql_query = f"SELECT categoryid, categoryname FROM Production.Categories WHERE categoryid > {categoryid_min}"
 
-sql_query = f"""
-    SELECT categoryid, categoryname FROM Production.Categories
-    WHERE categoryid > {categoryid_min}
-"""
-
-df_source = (
+# Read source data explicitly
+source_df = (
     spark.read.format("jdbc")
     .option("url", db_url)
     .option("user", db_user)
     .option("password", db_password)
     .option("dbtable", f"({sql_query}) as src")
-    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
     .load()
 )
 
 # 3. Transformations (Apply Logic)
-# No additional transformations specified.
+# No lookups or complex logic; just direct mapping
 
 # 3.1 Surrogate Key Generation (STABLE & IDEMPOTENT)
 # SAFE MIGRATION PATTERN: Lookup existing keys, generate new ones only for new members.
-import pyspark.sql.functions as F
-
 target_table_name = "DimCategory"
 bk_cols = ["categoryid"]
 sk_col = "CategoryKey"
@@ -47,53 +42,55 @@ sk_col = "CategoryKey"
 # 1. Get Existing Keys (Handle if table doesn't exist yet)
 try:
     df_target = spark.read.table(target_table_name).select(*bk_cols, sk_col)
-    max_sk = df_target.agg(F.max(F.col(sk_col))).collect()[0][0] or 0
-except:
+    max_sk = df_target.agg(max(col(sk_col))).collect()[0][0] or 0
+except Exception:
     df_target = None
     max_sk = 0
 
 # 2. Join Source with Target to find existing SKs
 if df_target is not None:
-    df_joined = df_source.join(df_target, on=bk_cols, how="left")
+    df_joined = source_df.join(df_target, on=bk_cols, how="left")
 else:
-    df_joined = df_source.withColumn(sk_col, F.lit(None).cast("integer"))
+    df_joined = source_df.withColumn(sk_col, lit(None).cast("integer"))
 
 # 3. Generate Keys for New Rows ONLY
 window_spec = Window.orderBy(*bk_cols)
-df_existing = df_joined.filter(F.col(sk_col).isNotNull())
-df_new = df_joined.filter(F.col(sk_col).isNull()).drop(sk_col)
-df_new = df_new.withColumn(sk_col, F.row_number().over(window_spec) + max_sk)
+df_existing = df_joined.filter(col(sk_col).isNotNull())
+df_new = df_joined.filter(col(sk_col).isNull()).drop(sk_col)
+df_new = df_new.withColumn(sk_col, row_number().over(window_spec) + max_sk)
 
 # 4. Union
-from functools import reduce
-df_with_sk = df_existing.unionByName(df_new)
+staged_df = df_existing.unionByName(df_new)
 
 # 3.2 Unknown Member Handling (For Dimensions)
 def ensure_unknown_member(df):
-    # Define the schema for the unknown member
+    # Define the unknown row explicitly
     unknown_row = {
-        "CategoryKey": -1,
         "categoryid": -1,
-        "categoryname": "Unknown"
+        "categoryname": "Unknown",
+        "CategoryKey": -1
     }
-    # Check if unknown member exists
+    # Check if unknown exists
     if df.filter(col("CategoryKey") == -1).count() == 0:
-        df_unknown = spark.createDataFrame([unknown_row], schema=df.schema)
-        df = df.unionByName(df_unknown)
+        unknown_df = spark.createDataFrame([unknown_row], schema=df.schema)
+        df = df.unionByName(unknown_df)
     return df
 
-df_with_sk = ensure_unknown_member(df_with_sk)
+staged_df = ensure_unknown_member(staged_df)
 
 # 4. Mandatory Type Casting (STRICT)
-# Target schema (STRICT): CategoryKey: INTEGER, categoryid: INTEGER, categoryname: STRING
-df_final = df_with_sk \
-    .withColumn("CategoryKey", col("CategoryKey").cast("integer")) \
-    .withColumn("categoryid", col("categoryid").cast("integer")) \
-    .withColumn("categoryname", col("categoryname").cast("string"))
+# Target schema (assumed from context):
+#   CategoryKey: INTEGER (Surrogate Key)
+#   categoryid: INTEGER (Business Key)
+#   categoryname: STRING
+staged_df = staged_df.withColumn("CategoryKey", col("CategoryKey").cast("integer"))
+staged_df = staged_df.withColumn("categoryid", col("categoryid").cast("integer"))
+staged_df = staged_df.withColumn("categoryname", col("categoryname").cast("string"))
 
 # 5. Writing to Silver/Gold (Apply Platform Pattern)
-# Idempotent overwrite (no SCD2 needed for static dimension)
-df_final.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table_name)
+# Idempotent overwrite (no SCD logic needed for static dimension)
+staged_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table_name)
 
-# 6. Optimization (Z-ORDER on business key)
-spark.sql(f"OPTIMIZE {target_table_name} ZORDER BY (categoryid)")
+# 6. Optimization (Z-ORDER)
+deltaTable = DeltaTable.forName(spark, target_table_name)
+deltaTable.optimize().executeZOrderBy("categoryid")

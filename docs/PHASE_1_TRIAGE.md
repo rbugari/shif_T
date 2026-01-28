@@ -18,7 +18,8 @@ En esta etapa, el sistema realiza un "escaneo inteligente" de tu proyecto para a
 1.  **Vista de Gráfico:** Una visualización interactiva de tu arquitectura. Puedes arrastrar activos, borrar nodos y auto-ordenar la malla (Vertical/Horizontal) para entender el flujo de datos.
 2.  **Inventario (Grilla):** Una lista detallada donde puedes editar masivamente las categorías de cada archivo.
 3.  **Refinado de Prompt:** Para usuarios avanzados, puedes darle "instrucciones" a la IA (ej: "Ignora todo lo que esté en la carpeta /logs") y volver a procesar el triaje.
-4.  **Modo Maximizador:** Oculta toda la interfaz para centrarte exclusivamente en el diseño de la malla técnica.
+4.  **Generación de Reporte PDF:** Un botón dedicado en la barra de herramientas que genera un inventario completo y un resumen ejecutivo del triaje para descarga inmediata.
+5.  **Modo Maximizador:** Oculta toda la interfaz para centrarte exclusivamente en el diseño de la malla técnica.
 
 ---
 
@@ -29,6 +30,7 @@ El proceso de Triage es una orquestación entre una capa de escaneo determinista
 ### 1. El Scanner (Discovery Engine)
 Ubicado en `DiscoveryService`, este componente escrito en Python realiza un análisis estático del sistema de archivos local o del repositorio clonado.
 *   **Extracción de Firmas:** No solo lee nombres; analiza el contenido XML/SQL para identificar "firmas" (ej: Tareas de SQL, Transformaciones de Datos, Scripts).
+*   **Escaneo Estricto:** Por seguridad y orden, el motor solo escanea archivos dentro de la subcarpeta `Triage/` del proyecto, ignorando salidas de fases anteriores o archivos basura en la raíz.
 *   **Generación de Manifiesto:** Crea un JSON estructurado que resume el inventario técnico sin enviar todo el código fuente masivo a la LLM, optimizando costos y contexto.
 
 ### 2. El Agente A (Mesh Architect)
@@ -42,8 +44,9 @@ La visualización utiliza **React Flow** en el frontend, pero la inteligencia de
 *   **Dagre Algorithm:** Implementa un layout de gráfico jerárquico (Directed Acyclic Graph) para asegurar que las dependencias fluyan de manera lógica y sin solapamientos.
 *   **Sincronización:** Cualquier cambio manual en el gráfico (como borrar un nodo) actualiza automáticamente el estado del activo a `IGNORED` en la base de datos (Supabase).
 
-### 4. Persistencia y Reinicio
-*   **PROYECTO_RESET:** Hemos implementado un endpoint `POST /projects/{id}/reset` que realiza una purga selectiva: elimina los activos (`assets`) y las transformaciones (`transformations`) asociadas, devolviendo el proyecto al estado "Discovery".
+### 4. Persistencia, Reporte y Reinicio
+*   **Generación de PDFs:** El endpoint `GET /projects/{id}/triage/report` utiliza `ReportLab` para generar un documento que resume los activos detectados, su clasificación y el estado del grafo. Estos PDFs se descargan al cliente y se guardan automáticamente en la carpeta de la solución para trazabilidad.
+*   **PROYECTO_RESET:** El endpoint `POST /projects/{id}/reset` realiza una purga selectiva: elimina los activos (`assets`) y las transformaciones (`transformations`) de la base de datos, y limpia las carpetas generadas (`Drafting`, `Refinement`), pero **siempre preserva la carpeta `Triage`** con los archivos fuente originales.
 *   **Layout Saving:** Las coordenadas de cada nodo se guardan en un registro de tipo `LAYOUT` en Supabase para que tu trabajo de diseño no se pierda al recargar.
 
 ---

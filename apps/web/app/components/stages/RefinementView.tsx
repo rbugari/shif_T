@@ -1,10 +1,11 @@
-
 "use client";
 import { useState, useEffect } from 'react';
-import { Play, FileText, Database, GitBranch, Terminal, Layers, CheckCircle, Search } from 'lucide-react';
+import { Play, FileText, Database, GitBranch, Terminal, Layers, CheckCircle, FileCode } from 'lucide-react';
 import { API_BASE_URL } from '../../lib/config';
 import CodeDiffViewer from '../CodeDiffViewer';
 import PromptsExplorer from '../PromptsExplorer';
+import LoadingOverlay from '../ui/LoadingOverlay';
+import SolutionExplorer from '../SolutionExplorer';
 
 interface RefinementViewProps {
     projectId: string;
@@ -25,7 +26,6 @@ export default function RefinementView({ projectId, onStageChange }: RefinementV
     const [profile, setProfile] = useState<any>(null);
 
     // Workbench State
-    const [fileTree, setFileTree] = useState<any[]>([]);
     const [selectedFile, setSelectedFile] = useState<string | null>(null);
     const [fileContent, setFileContent] = useState<string>("");
     const [originalContent, setOriginalContent] = useState<string>("");
@@ -92,94 +92,36 @@ export default function RefinementView({ projectId, onStageChange }: RefinementV
         }
     };
 
-    // Fetch files when changing to Workbench or Artifacts tab
-    useEffect(() => {
-        if (activeTab === 'workbench' || activeTab === 'artifacts') {
-            fetch(`${API_BASE_URL}/projects/${projectId}/files`)
-                .then(res => res.json())
-                .then(data => setFileTree(data))
-                .catch(err => console.error("Failed to load file tree", err));
-        }
-    }, [activeTab, projectId, logs]); // Refresh when logs change (pipeline done)
-
     const resolveOriginalPath = (refinedPath: string) => {
-        // Heuristic to find original file in Output/ from a Refined/ file
-        // Refined: .../Refined/Bronze/DimCategory_bronze.py -> Output/DimCategory.py
         if (!refinedPath.includes('Refined')) return null;
 
-        // Extract filename and clean layer suffixes
         let filename = refinedPath.split(/[\\/]/).pop() || "";
         filename = filename.replace('_bronze.py', '.py')
             .replace('_silver.py', '.py')
             .replace('_gold.py', '.py');
 
-        // Replace Refined/... with Output/
         const basePath = refinedPath.split('Refined')[0];
         return `${basePath}Output/${filename}`;
     };
 
-    const handleFileSelect = async (path: string) => {
+    const onFileSelectedFromExplorer = async (content: string, name: string, path: string) => {
         setSelectedFile(path);
-        setIsLoadingFile(true);
-        setFileContent("");
+        setFileContent(content);
         setOriginalContent("");
+        setIsLoadingFile(false);
 
-        try {
-            // Load Refined Content
-            const res = await fetch(`${API_BASE_URL}/projects/${projectId}/files/content?path=${encodeURIComponent(path)}`);
-            const data = await res.json();
-            setFileContent(data.content || "");
-
-            // If in Workbench (Diff), try to load original
-            if (activeTab === 'workbench') {
-                const origPath = resolveOriginalPath(path);
-                if (origPath) {
+        if (activeTab === 'workbench') {
+            const origPath = resolveOriginalPath(path);
+            if (origPath) {
+                try {
                     const resOrig = await fetch(`${API_BASE_URL}/projects/${projectId}/files/content?path=${encodeURIComponent(origPath)}`);
                     const dataOrig = await resOrig.json();
                     setOriginalContent(dataOrig.content || "-- Original file not found --");
+                } catch (e) {
+                    setOriginalContent("-- Original file not found (Error) --");
                 }
             }
-        } catch (e) {
-            console.error("Failed to load file content", e);
-            setFileContent("// Failed to load content");
-        } finally {
-            setIsLoadingFile(false);
         }
-    };
-
-    const renderFileTree = (nodes: any[], filterDir?: string) => {
-        // Option to filter tree to a specific root directory (e.g. "Refined")
-        const visibleNodes = filterDir ? nodes.filter(n => n.name === filterDir) : nodes;
-
-        const renderNodes = (nds: any[]) => (
-            <ul className="pl-4 border-l border-gray-200 dark:border-gray-800 space-y-1">
-                {nds.map((node: any) => (
-                    <li key={node.path}>
-                        {node.type === 'directory' ? (
-                            <details open={node.name === 'Refined' || node.name === 'Bronze' || node.name === 'Silver'}>
-                                <summary className="cursor-pointer text-sm font-bold text-gray-700 dark:text-gray-300 hover:text-primary list-none flex items-center gap-1">
-                                    <span className="text-xs">📂</span> {node.name}
-                                </summary>
-                                {node.children && renderNodes(node.children)}
-                            </details>
-                        ) : (
-                            <button
-                                onClick={() => handleFileSelect(node.path)}
-                                className={`text-sm py-1 px-2 rounded w-full text-left truncate flex items-center gap-2 ${selectedFile === node.path
-                                    ? 'bg-primary/10 text-primary font-bold'
-                                    : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800'
-                                    }`}
-                            >
-                                <FileText size={14} />
-                                {node.name}
-                            </button>
-                        )}
-                    </li>
-                ))}
-            </ul>
-        );
-
-        return renderNodes(visibleNodes);
     };
 
     const isComplete = logs.some(l => l.includes("Pipeline Complete") || l.includes("COMPLETED"));
@@ -191,7 +133,10 @@ export default function RefinementView({ projectId, onStageChange }: RefinementV
                 {TABS.map(tab => (
                     <button
                         key={tab.id}
-                        onClick={() => setActiveTab(tab.id)}
+                        onClick={() => {
+                            setActiveTab(tab.id);
+                            setSelectedFile(null); // Clear selection on tab change
+                        }}
                         className={`flex items-center gap-2 px-6 py-4 text-sm font-medium border-b-2 transition-colors ${activeTab === tab.id
                             ? 'border-primary text-primary bg-primary/5'
                             : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
@@ -206,7 +151,6 @@ export default function RefinementView({ projectId, onStageChange }: RefinementV
             <div className="flex-1 p-8 overflow-hidden">
                 {activeTab === 'orchestrator' && (
                     <div className="max-w-4xl mx-auto space-y-6 flex flex-col h-full">
-                        {/* Control Panel */}
                         <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-700 flex justify-between items-center shrink-0">
                             <div>
                                 <h2 className="text-xl font-bold flex items-center gap-2"><Layers className="text-primary" /> Phase 3: Refinement</h2>
@@ -231,7 +175,6 @@ export default function RefinementView({ projectId, onStageChange }: RefinementV
                             </div>
                         </div>
 
-                        {/* Console Output */}
                         <div className="flex-1 bg-black text-green-400 rounded-xl p-6 font-mono text-sm overflow-y-auto shadow-inner border border-gray-800 min-h-0">
                             <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-2">
                                 <span className="font-bold text-gray-400">AGENT LOGS</span>
@@ -244,7 +187,6 @@ export default function RefinementView({ projectId, onStageChange }: RefinementV
                             </div>
                         </div>
 
-                        {/* Profile Summary */}
                         {profile && (
                             <div className="grid grid-cols-2 gap-4 shrink-0">
                                 <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border border-gray-200 shadow-sm">
@@ -272,22 +214,13 @@ export default function RefinementView({ projectId, onStageChange }: RefinementV
 
                 {(activeTab === 'workbench' || activeTab === 'artifacts') && (
                     <div className="flex h-full gap-4">
-                        {/* File Tree */}
-                        <div className="w-1/4 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden">
-                            <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 flex justify-between items-center">
-                                <h3 className="font-bold text-sm uppercase text-gray-400">{activeTab === 'workbench' ? 'Files to Review' : 'Artifacts Explorer'}</h3>
-                                <button className="text-gray-400 hover:text-primary"><Search size={14} /></button>
-                            </div>
-                            <div className="flex-1 overflow-y-auto p-2">
-                                {fileTree.length === 0 ? (
-                                    <p className="text-gray-400 text-sm text-center mt-10">No files generated yet.</p>
-                                ) : (
-                                    renderFileTree(fileTree, activeTab === 'artifacts' ? 'Refined' : undefined)
-                                )}
-                            </div>
+                        <div className="w-1/4 h-full">
+                            <SolutionExplorer
+                                projectId={projectId}
+                                onFileSelect={onFileSelectedFromExplorer}
+                            />
                         </div>
 
-                        {/* Right Content Pane (Diff or Artifact Viewer) */}
                         <div className="flex-1 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden shadow-lg">
                             <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-900/50">
                                 <h3 className="font-bold text-sm flex items-center gap-2">
@@ -304,20 +237,20 @@ export default function RefinementView({ projectId, onStageChange }: RefinementV
                                 {selectedFile && <span className="text-xs text-gray-400 font-mono truncate max-w-[300px]">{selectedFile}</span>}
                             </div>
 
-                            <div className="flex-1 overflow-auto relative">
+                            <div className="flex-1 overflow-auto relative bg-[#1e1e1e]">
                                 {isLoadingFile ? (
                                     <div className="flex items-center justify-center h-full text-gray-500">Loading content...</div>
                                 ) : selectedFile ? (
                                     activeTab === 'workbench' ? (
                                         <CodeDiffViewer originalCode={originalContent} modifiedCode={fileContent} />
                                     ) : (
-                                        <div className="p-4 bg-[#1e1e1e] text-gray-200 font-mono text-sm leading-relaxed h-full overflow-auto">
+                                        <div className="p-4 text-gray-200 font-mono text-sm leading-relaxed h-full overflow-auto">
                                             <pre className="whitespace-pre-wrap">{fileContent}</pre>
                                         </div>
                                     )
                                 ) : (
                                     <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
-                                        <Layers size={48} className="text-gray-700" />
+                                        <Layers size={48} className="text-gray-700/20" />
                                         <p>Select a file to inspect generated code.</p>
                                     </div>
                                 )}
@@ -326,6 +259,7 @@ export default function RefinementView({ projectId, onStageChange }: RefinementV
                     </div>
                 )}
             </div>
+            <LoadingOverlay isVisible={isRunning} message="Refinando Arquitectura (Medallion)..." />
         </div>
     );
 }

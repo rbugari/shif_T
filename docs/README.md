@@ -20,4 +20,4 @@ Shift-T orquesta la modernización a través de cuatro etapas críticas. Haz cli
 *   **[Backlog Post-Triage](BACKLOG_POST_TRIAGE.md):** Mejoras identificadas y pospuestas.
 
 ---
-*Shift-T Documentation Framework v1.0*
+*Shift-T Documentation Framework v1.1*

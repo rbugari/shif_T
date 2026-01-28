@@ -175,6 +175,8 @@ class MigrationOrchestrator:
         return results
 
     def _save_artifact(self, filename: str, content: str):
+        # Ensure directory exists before writing
+        os.makedirs(self.output_path, exist_ok=True)
         path = os.path.join(self.output_path, filename)
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)

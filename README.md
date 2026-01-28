@@ -1,4 +1,4 @@
-# Shift-T (Release R1) - Modernization Platform
+# Shift-T (Release R1.1) - Modernization Platform
 
 Shift-T is an AI-powered agentic platform designed to automate the migration of legacy SSIS packages to modern PySpark/Databricks architectures using an Execution Mesh approach.
 
@@ -12,9 +12,14 @@ python run.py
 
 This script will start the FastAPI backend (Port 8000), the Next.js frontend (Port 3001), and open your dashboard.
 
-## ✨ Key Features (Triage & Discovery)
+## ✨ New in R1.1
 
-We have recently enhanced the Discovery phase to provide a premium architecture design experience:
+-   **Integrated Help Center:** New `/docs` page with deep technical deep dives, interactive I/O tables, and architectural diagrams.
+-   **Triage Report (PDF):** One-click generation of professional PDF reports summarizing discovery, gaps, and inventory.
+-   **Unified Solution Explorer:** Consistent file tree navigation across all stages (Drafting, Refinement, Governance) with real-time file previews.
+-   **UUID Support:** Improved backend folder sanitization to support project names and UUIDs seamlessly.
+
+## ✨ Key Features (Mesh & Discovery)
 
 -   **Interactive Execution Mesh:** Dynamic graph visualization using React Flow and Dagre for auto-layout.
 -   **Collapsible Workspace:** Hide/Show the assets sidebar to maximize architecture design space.
@@ -24,7 +29,6 @@ We have recently enhanced the Discovery phase to provide a premium architecture 
 -   **Editable Grid:** Mass-edit categories and sync changes instantly with the visual graph.
 -   **Migration Persistence:** Real-time log persistence to view historical execution results (Log Replay).
 -   **Workflow Toolbar:** Seamless stage transitions with "Approve & Refine" actions.
--   **Enhanced Dashboard:** Project cards with clear stage indicators, origin types, and asset counts.
 
 ## 📋 Prerequisites
 -   Python 3.11+
@@ -47,6 +51,7 @@ Detailed guides are available in the `/docs` folder:
 -   [Fase 3: Refinement & Medallion Architecture](docs/PHASE_3_REFINEMENT.md)
 -   [Fase 4: Governance & Compliance](docs/PHASE_4_GOVERNANCE.md)
 -   [Technical Specification](docs/SPECIFICATION.md)
+-   [User Help Center](http://localhost:3001/docs) (Running app)
 
 ---
 *Shift-T: Automating de-complexification.*

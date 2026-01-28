@@ -18,7 +18,7 @@ class PersistenceService:
     def ensure_solution_dir(cls, solution_name: str) -> str:
         """Creates a directory for the specific solution if it doesn't exist."""
         # Sanitize name
-        folder_name = "".join([c if c.isalnum() else "_" for c in solution_name])
+        folder_name = "".join([c if c.isalnum() or c == '-' else "_" for c in solution_name])
         path = os.path.join(cls.BASE_DIR, folder_name)
         os.makedirs(path, exist_ok=True)
         return path
@@ -89,6 +89,17 @@ class PersistenceService:
         return file_path
 
     @classmethod
+    def save_report_pdf(cls, solution_name: str, filename: str, content: bytes) -> str:
+        """Saves a binary PDF report to the solution directory."""
+        dir_path = cls.ensure_solution_dir(solution_name)
+        file_path = os.path.join(dir_path, filename)
+        
+        with open(file_path, "wb") as f:
+            f.write(content)
+            
+        return file_path
+
+    @classmethod
     def initialize_project_from_source(cls, project_id: str, source_type: str, file_path: str = None, github_url: str = None, overwrite: bool = False) -> bool:
         """Initializes a project directory from a ZIP file or GitHub Repo. Handles overwrite logic."""
         import zipfile
@@ -135,11 +146,16 @@ class PersistenceService:
     def get_project_files(cls, project_id: str) -> List[Dict[str, Any]]:
         """Returns a recursive query of the project's solution directory."""
         # Clean ID just in case
-        folder_name = "".join([c if c.isalnum() else "_" for c in project_id])
+        folder_name = "".join([c if c.isalnum() or c == '-' else "_" for c in project_id])
         solution_path = os.path.join(cls.BASE_DIR, folder_name)
         
         if not os.path.exists(solution_path):
-            return []
+            return {
+                "name": folder_name,
+                "path": solution_path,
+                "type": "folder",
+                "children": []
+            }
 
         def _scan_dir(path: str) -> List[Dict[str, Any]]:
             children = []
@@ -152,30 +168,36 @@ class PersistenceService:
                         
                         node = {
                             "name": entry.name,
-                            "path": entry.path, # Absolute path, maybe dangerous to expose but needed for read
-                            "type": "directory" if entry.is_dir() else "file",
+                            "path": entry.path, 
+                            "type": "folder" if entry.is_dir() else "file",
                             "last_modified": entry.stat().st_mtime
                         }
                         if entry.is_dir():
                             node["children"] = _scan_dir(entry.path)
                             # Sort: folders first, then files
-                            node["children"].sort(key=lambda x: (x["type"] != "directory", x["name"]))
+                            node["children"].sort(key=lambda x: (x["type"] != "folder", x["name"]))
                             
                         children.append(node)
             except Exception as e:
                 print(f"Error scanning {path}: {e}")
                 
             # Sort: folders first, then files
-            children.sort(key=lambda x: (x["type"] != "directory", x["name"]))
+            children.sort(key=lambda x: (x["type"] != "folder", x["name"]))
             return children
 
-        return _scan_dir(solution_path)
+        # Return a single root node instead of a list
+        return {
+            "name": folder_name,
+            "path": solution_path,
+            "type": "folder",
+            "children": _scan_dir(solution_path)
+        }
 
     @classmethod
     def read_file_content(cls, project_id: str, file_path: str) -> str:
         """Reads the content of a specific file within the project's solution directory."""
         # Security check: Ensure file is inside project dir
-        folder_name = "".join([c if c.isalnum() else "_" for c in project_id])
+        folder_name = "".join([c if c.isalnum() or c == '-' else "_" for c in project_id])
         project_root = os.path.join(cls.BASE_DIR, folder_name)
         
         # Resolve absolute path
@@ -242,10 +264,23 @@ class SupabasePersistence:
 
     async def get_project_metadata(self, project_id: str) -> Optional[Dict[str, Any]]:
         """Returns project metadata (name, repo_url, status, stage)."""
-        res = self.client.table("projects").select("name, repo_url, status, stage").eq("id", project_id).execute()
-        if res.data:
-            return res.data[0]
+        try:
+            res = self.client.table("projects").select("name, repo_url, status, stage").eq("id", project_id).execute()
+            if res.data:
+                return res.data[0]
+        except Exception:
+            # Likely invalid UUID format (e.g. project_id is a name like "base")
+            pass
         return None
+
+    async def clean_project_assets(self, project_id: str) -> bool:
+        """Deletes all assets for a project to ensure a clean slate before re-triage."""
+        try:
+            self.client.table("assets").delete().eq("project_id", project_id).execute()
+            return True
+        except Exception as e:
+            print(f"Error cleaning project assets {project_id}: {e}")
+            return False
 
     async def save_asset(self, project_id: str, filename: str, content: str, asset_type: str, file_hash: str, source_path: str = None) -> str:
         """Saves an asset (e.g. .dtsx file) to the database."""
@@ -396,12 +431,38 @@ class SupabasePersistence:
         return None
 
     async def reset_project_data(self, project_id: str) -> bool:
-        """Clears all assets and resets stage for a project."""
+        """Clears all assets and resets stage for a project. Preserves Triage folder."""
         try:
-            # Delete all assets for the project
+            # 1. DB Cleanup: Delete generated assets (keeping it simple: delete all for now, 
+            #    assuming Triage will re-scan or we accept re-scanning Triage source)
+            #    If we want to keep Triage "assets" in DB, we'd need to filter by type/stage.
+            #    For now, full DB wipe + re-scan is safer to ensure consistency.
             self.client.table("assets").delete().eq("project_id", project_id).execute()
-            # Reset stage to 1 (Discovery)
-            self.client.table("projects").update({"stage": "1"}).eq("id", project_id).execute()
+            
+            # 2. Reset stage AND status
+            self.client.table("projects").update({"stage": "1", "status": "TRIAGE"}).eq("id", project_id).execute()
+
+            # 3. File System Cleanup (Preserve Triage)
+            folder_name = "".join([c if c.isalnum() else "_" for c in project_id])
+            solution_path = os.path.join(PersistenceService.BASE_DIR, folder_name)
+            
+            if os.path.exists(solution_path):
+                # Iterate and delete non-Triage items
+                for item in os.listdir(solution_path):
+                    if item == PersistenceService.STAGE_TRIAGE:
+                        continue # Skip source folder
+                    
+                    item_path = os.path.join(solution_path, item)
+                    try:
+                        if os.path.isdir(item_path):
+                            PersistenceService.robust_rmtree(item_path)
+                            print(f"Reset: Deleted folder {item}")
+                        else:
+                            os.remove(item_path)
+                            print(f"Reset: Deleted file {item}")
+                    except Exception as e:
+                        print(f"Reset: Failed to delete {item}: {e}")
+
             return True
         except Exception as e:
             print(f"Error resetting project {project_id}: {e}")

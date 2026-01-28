@@ -1,6 +1,13 @@
 {
   "status": "APPROVED",
-  "score": 100,
-  "violations": [],
+  "score": 98,
+  "violations": [
+    {
+      "severity": "WARNING",
+      "rule": "SCD Type 2",
+      "description": "The code uses Delta Lake MERGE for SCD Type 1 (no history columns such as current_flag or end_date). This is correct for a Type 1 dimension, but if SCD Type 2 is required, the code must be updated to handle record expiration and new inserts concurrently.",
+      "suggestion": "If SCD Type 2 is required, add logic for current_flag and end_date, and update the MERGE statement accordingly."
+    }
+  ],
   "fixed_code": null
 }

@@ -8,67 +8,67 @@ from delta.tables import *
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from pyspark.sql.window import Window
-import pyspark.sql.functions as F
 
 # 2. Reading Bronze / Source
-# -- Setup JDBC connection (parameters should be set via widgets or secrets)
-db_url = dbutils.secrets.get(scope="jdbc-secrets", key="hr_db_url")
-db_user = dbutils.secrets.get(scope="jdbc-secrets", key="hr_db_user")
-db_password = dbutils.secrets.get(scope="jdbc-secrets", key="hr_db_password")
+# Securely fetch JDBC credentials
+jdbc_hostname = dbutils.secrets.get('scope_hr', 'hr_db_hostname')
+jdbc_port = dbutils.secrets.get('scope_hr', 'hr_db_port')
+jdbc_database = dbutils.secrets.get('scope_hr', 'hr_db_name')
+jdbc_username = dbutils.secrets.get('scope_hr', 'hr_db_user')
+jdbc_password = dbutils.secrets.get('scope_hr', 'hr_db_password')
+jdbc_url = f"jdbc:sqlserver://{jdbc_hostname}:{jdbc_port};databaseName={jdbc_database}"
 
-# -- Parameter for empid lower bound (simulate SSIS parameter)
-empid_min = dbutils.widgets.get("empid_min") if dbutils.widgets.get("empid_min", None) else "0"
+# Parameter for empid threshold (replace with widget or parameter as needed)
+empid_threshold = dbutils.widgets.get('empid_threshold') if 'empid_threshold' in dbutils.widgets.get('') else '0'
 
-# -- Compose the query
-sql_query = f"""
-SELECT empid, (firstname + ' ' + lastname) as fullname, title, city, country, address, phone
+source_query = f"""
+SELECT empid, (firstname + ' ' + lastname) AS fullname, title, city, country, address, phone
 FROM HR.Employees
-WHERE empid > {empid_min}
+WHERE empid > {empid_threshold}
 """
 
-# -- Read source data
+# Read source data
 source_df = (
     spark.read.format("jdbc")
-    .option("url", db_url)
-    .option("user", db_user)
-    .option("password", db_password)
-    .option("dbtable", f"({sql_query}) as src")
+    .option("url", jdbc_url)
+    .option("dbtable", f"({source_query}) as src")
+    .option("user", jdbc_username)
+    .option("password", jdbc_password)
     .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
     .load()
 )
 
 # 3. Transformations (Apply Logic)
-# -- No lookups, just direct mapping
-# -- Target columns: EmployeeKey (SK), EmployeeAlternateKey (empid), FullName, Title, City, Country, Address, Phone
+# No lookups required for this task
 
 # 3.1 Surrogate Key Generation (STABLE & IDEMPOTENT)
 # SAFE MIGRATION PATTERN: Lookup existing keys, generate new ones only for new members.
 target_table_name = "DimEmployee"
-bk_cols = ["empid"]  # Business Key is empid
+bk_cols = ["empid"]
 sk_col = "EmployeeKey"
 
 # 1. Get Existing Keys (Handle if table doesn't exist yet)
 try:
-    df_target = spark.read.table(target_table_name).select("EmployeeAlternateKey", sk_col)
-    max_sk = df_target.agg(F.max(F.col(sk_col))).collect()[0][0] or 0
+    df_target = spark.read.table(target_table_name).select(*bk_cols, sk_col)
+    max_sk = df_target.agg(max(col(sk_col))).collect()[0][0] or 0
 except Exception:
     df_target = None
     max_sk = 0
 
 # 2. Join Source with Target to find existing SKs
 if df_target is not None:
-    df_target = df_target.withColumnRenamed("EmployeeAlternateKey", "empid")
-    df_joined = source_df.join(df_target, on="empid", how="left")
+    df_joined = source_df.join(df_target, on=bk_cols, how="left")
 else:
-    df_joined = source_df.withColumn(sk_col, F.lit(None).cast("integer"))
+    df_joined = source_df.withColumn(sk_col, lit(None).cast("integer"))
 
 # 3. Generate Keys for New Rows ONLY
-window_spec = Window.orderBy("empid")
-df_existing = df_joined.filter(F.col(sk_col).isNotNull())
-df_new = df_joined.filter(F.col(sk_col).isNull()).drop(sk_col)
-df_new = df_new.withColumn(sk_col, F.row_number().over(window_spec) + max_sk)
+window_spec = Window.orderBy(*bk_cols)
+df_existing = df_joined.filter(col(sk_col).isNotNull())
+df_new = df_joined.filter(col(sk_col).isNull()).drop(sk_col)
+df_new = df_new.withColumn(sk_col, row_number().over(window_spec) + max_sk)
 
-df_with_sk = df_existing.unionByName(df_new)
+# 4. Union
+employee_df = df_existing.unionByName(df_new)
 
 # 3.2 Unknown Member Handling (For Dimensions)
 def ensure_unknown_member(df):
@@ -82,64 +82,40 @@ def ensure_unknown_member(df):
         "address": "Unknown",
         "phone": "Unknown"
     }
-    # Check if unknown exists
-    if df.filter(df["EmployeeKey"] == -1).count() == 0:
-        schema = df.schema
-        unknown_df = spark.createDataFrame([unknown_row], schema=schema)
-        df = df.unionByName(unknown_df)
-    return df
+    from pyspark.sql import Row
+    unknown_df = spark.createDataFrame([Row(**unknown_row)])
+    if df.filter(col("EmployeeKey") == -1).count() == 0:
+        return df.unionByName(unknown_df)
+    else:
+        return df
 
-df_with_sk = ensure_unknown_member(df_with_sk)
+employee_df = ensure_unknown_member(employee_df)
 
 # 4. Mandatory Type Casting (STRICT)
-# -- Target schema (as per best practice, since not provided, we infer from SSIS and platform rules):
-# EmployeeKey: INTEGER (SK)
-# EmployeeAlternateKey: INTEGER (empid)
-# FullName: STRING
-# Title: STRING
-# City: STRING
-# Country: STRING
-# Address: STRING
-# Phone: STRING
-
-df_final = (
-    df_with_sk
-    .withColumnRenamed("empid", "EmployeeAlternateKey")
-    .withColumnRenamed("fullname", "FullName")
-    .withColumnRenamed("title", "Title")
-    .withColumnRenamed("city", "City")
-    .withColumnRenamed("country", "Country")
-    .withColumnRenamed("address", "Address")
-    .withColumnRenamed("phone", "Phone")
+# Define target schema types explicitly
+employee_df = (
+    employee_df
     .withColumn("EmployeeKey", col("EmployeeKey").cast("integer"))
-    .withColumn("EmployeeAlternateKey", col("EmployeeAlternateKey").cast("integer"))
-    .withColumn("FullName", col("FullName").cast("string"))
-    .withColumn("Title", col("Title").cast("string"))
-    .withColumn("City", col("City").cast("string"))
-    .withColumn("Country", col("Country").cast("string"))
-    .withColumn("Address", col("Address").cast("string"))
-    .withColumn("Phone", col("Phone").cast("string"))
+    .withColumn("empid", col("empid").cast("integer"))
+    .withColumn("fullname", col("fullname").cast("string"))
+    .withColumn("title", col("title").cast("string"))
+    .withColumn("city", col("city").cast("string"))
+    .withColumn("country", col("country").cast("string"))
+    .withColumn("address", col("address").cast("string"))
+    .withColumn("phone", col("phone").cast("string"))
 )
 
 # 5. Writing to Silver/Gold (Apply Platform Pattern)
-# -- Overwrite for idempotency
+# Overwrite the DimEmployee table (idempotent)
 (
-    df_final
-    .select(
-        "EmployeeKey",
-        "EmployeeAlternateKey",
-        "FullName",
-        "Title",
-        "City",
-        "Country",
-        "Address",
-        "Phone"
-    )
-    .write.format("delta")
+    employee_df
+    .write
+    .format("delta")
     .mode("overwrite")
     .option("overwriteSchema", "true")
     .saveAsTable(target_table_name)
 )
 
-# 6. Optimization (Z-ORDER on EmployeeAlternateKey)
-spark.sql(f"OPTIMIZE {target_table_name} ZORDER BY (EmployeeAlternateKey)")
+# 6. Optimization (Z-ORDER)
+# Z-ORDER on empid for query performance
+spark.sql(f"OPTIMIZE {target_table_name} ZORDER BY (empid)")

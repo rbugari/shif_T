@@ -24,7 +24,7 @@ export default function LandingPage() {
         {/* Central Illustration */}
         <div className="relative w-full max-w-4xl aspect-video rounded-2xl overflow-hidden shadow-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
           <Image
-            src="/fondo.png"
+            src="/pres.png"
             alt="Shift-T Platform Preview"
             fill
             className="object-cover object-top hover:scale-105 transition-transform duration-700 ease-out"

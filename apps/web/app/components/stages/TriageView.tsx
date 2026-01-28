@@ -14,6 +14,7 @@ import { CheckCircle, Layout, List, Terminal, MessageSquare, Play, FileText, Rot
 import DiscoveryDashboard from '../DiscoveryDashboard';
 
 import { API_BASE_URL } from '../../lib/config';
+import LoadingOverlay from '../ui/LoadingOverlay';
 
 // Tab Definitions
 const TABS = [
@@ -31,6 +32,7 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
     // Data State
     const [assets, setAssets] = useState<any[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+    const [isProcessing, setIsProcessing] = useState(false);
     const [isReadOnly, setIsReadOnly] = useState(false);
 
     // Graph State
@@ -303,7 +305,7 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
         const confirmMsg = "Esta acción ejecutará agentes de IA para analizar el repositorio. Esto incurre en costos de tokens y tiempo de procesamiento.\n\n¿Deseas continuar?";
         if (!window.confirm(confirmMsg)) return;
 
-        setIsLoading(true);
+        setIsProcessing(true); // Usage of new state
         try {
             const res = await fetch(`${API_BASE_URL}/projects/${projectId}/triage`, {
                 method: 'POST',
@@ -332,7 +334,7 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
             console.error("Triage failed", e);
             alert("Error al ejecutar el triaje");
         } finally {
-            setIsLoading(false);
+            setIsProcessing(false);
         }
     };
 
@@ -350,6 +352,7 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
                 setNodes([]);
                 setEdges([]);
                 setTriageLog("");
+                setIsReadOnly(false); // Unlock the UI immediately
                 alert("Proyecto reiniciado correctamente.");
             }
         } catch (e) {
@@ -426,6 +429,16 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
                         >
                             <RotateCcw size={18} />
                         </button>
+                        <div className="w-px h-6 bg-gray-200 dark:bg-gray-800 mx-1" />
+                        <a
+                            href={`${API_BASE_URL}/projects/${projectId}/triage/report`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={`text-gray-600 dark:text-gray-300 hover:text-primary p-2 rounded-lg transition-colors flex items-center gap-2`}
+                            title="Descargar Reporte PDF"
+                        >
+                            <FileText size={18} />
+                        </a>
                         <div className="w-px h-6 bg-gray-200 dark:bg-gray-800 mx-1" />
                         <button
                             onClick={handleReTriage}
@@ -686,6 +699,8 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
 
                 </div>
             </div>
+            {/* Loading Overlay for Triage Process */}
+            <LoadingOverlay isVisible={isProcessing} message="Ejecutando Triaje con Agentes IA..." />
         </ReactFlowProvider>
     );
 }

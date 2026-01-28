@@ -30,6 +30,7 @@ Antes de escribir una línea de código, el sistema "desarma" el paquete SSIS or
 
 ### 2. Migration Orchestrator (El Director)
 Prepara el "Task Definition" para los agentes. Empaqueta el contexto necesario (Inputs, Outputs, Lookups, SQL Commands) en un formato estructurado que elimina la ambigüedad.
+*   **Auto-Provisionamiento:** El orquestador ahora se encarga de crear automáticamente la estructura de directorios necesaria (`Drafting/`) antes de iniciar la generación, evitando errores de "Path not found".
 
 ### 3. Agent C: The Developer (El Constructor)
 Es el experto en PySpark. Recibe la definición de la tarea y aplica las **Reglas de Oro de Shift-T**:
@@ -106,4 +107,4 @@ Aunque el código actual es funcional y seguro, para alcanzar un nivel **Enterpr
 *   **Futuro:** Generación automática de `azure-pipelines.yaml` o `github-workflows.yaml` para desplegar y testear estos notebooks automáticamente.
 
 ---
-*Shift-T Documentation Framework v1.0 - Stage 2*
+*Shift-T Documentation Framework v1.1 - Stage 2*

@@ -27,7 +27,7 @@ export default function FileUpload({ onSuccess }: UploadProps) {
         formData.append('file', file);
 
         try {
-            const response = await fetch('http://localhost:8000/ingest/dtsx', {
+            const response = await fetch('http://localhost:8002/ingest/dtsx', {
                 method: 'POST',
                 body: formData,
             });
