@@ -1,0 +1,3 @@
+--- Migration Started for demo2 ---
+[2026-01-29T09:57:52.384633] Starting Migration for demo2
+[2026-01-29T09:57:53.222001] BLOCKED: Project status is 'TRIAGE'. Must be 'DRAFTING'.
