@@ -1,6 +1,13 @@
 {
   "status": "APPROVED",
-  "score": 100,
-  "violations": [],
+  "score": 98,
+  "violations": [
+    {
+      "severity": "WARNING",
+      "rule": "Type Safety",
+      "description": "The code uses string literals ('integer', 'string') for type casting. While PySpark accepts these, using Spark SQL types (IntegerType, StringType) is more robust and less error-prone.",
+      "suggestion": "Consider using pyspark.sql.types (e.g., IntegerType()) for explicit type safety, especially if schema evolves or is reused."
+    }
+  ],
   "fixed_code": null
 }

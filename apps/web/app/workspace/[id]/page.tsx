@@ -142,50 +142,11 @@ export default function WorkspacePage() {
         }
     };
 
-    const [isStageComplete, setIsStageComplete] = useState(false);
 
-    // Reset completion when stage changes
-    useEffect(() => {
-        setIsStageComplete(false);
-    }, [stage]);
-
-    const handleApproveStage = async () => {
-        if (!id) return;
-        try {
-            const nextStage = stage + 1;
-            const res = await fetch(`${API_BASE_URL}/projects/${id}/stage`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ stage: nextStage.toString() })
-            });
-            const data = await res.json();
-            if (data.success) {
-                setStage(nextStage);
-            }
-        } catch (e) {
-            console.error("Failed to update stage", e);
-        }
-    };
 
     if (!id) return <div className="flex items-center justify-center h-screen">Loading Workspace...</div>;
 
-    // Resolve Action Button Props based on Stage
-    let actionLabel = undefined;
-    let onAction = undefined;
-    let actionDisabled = false;
 
-    if (stage === 1) {
-        actionLabel = "Iniciar Drafting";
-        onAction = () => setStage(2); // Manual transition for now or check triage status
-        // Triage is mostly manual/exploration, so maybe always enabled or check if nodes > 0
-    } else if (stage === 2) {
-        actionLabel = "Aprobar & Refinar";
-        onAction = handleApproveStage;
-        actionDisabled = !isStageComplete;
-    } else if (stage === 3) {
-        actionLabel = "Generar Output";
-        onAction = () => setStage(4);
-    }
 
     return (
         <ReactFlowProvider>
@@ -238,13 +199,9 @@ export default function WorkspacePage() {
                             </div>
                         </div>
 
-                        {/* New Visual Workflow Toolbar */}
                         <WorkflowToolbar
                             currentStage={stage}
                             onSetStage={setStage}
-                            actionLabel={actionLabel}
-                            onAction={onAction}
-                            actionDisabled={actionDisabled}
                         />
                     </header>
 
@@ -258,7 +215,6 @@ export default function WorkspacePage() {
                             <DraftingView
                                 projectId={id || ""}
                                 onStageChange={setStage}
-                                onCompletion={(completed) => setIsStageComplete(completed)}
                             />
                         )}
                         {stage === 3 && (

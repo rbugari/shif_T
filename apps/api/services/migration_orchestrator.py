@@ -8,6 +8,7 @@ from services.librarian_service import LibrarianService
 from services.topology_service import TopologyService
 from services.developer_service import DeveloperService
 from services.compliance_service import ComplianceService
+from services.discovery_service import DiscoveryService
 
 from services.persistence_service import PersistenceService, SupabasePersistence
 try:
@@ -84,6 +85,10 @@ class MigrationOrchestrator:
                 "failed": []
             }
 
+        # 0.5. Load Knowledge Context (Drivers)
+        knowledge_context = DiscoveryService.get_global_knowledge_context()
+        logger.info("Loaded Knowledge Context from Drivers.", "Orchestrator")
+
         # 1. THE LIBRARIAN (Context)
         logger.info("Step 1: Librarian - Scanning Schema Context...", "Orchestrator")
         self._log_persistence("Step 1: Librarian - Scanning Schema Context...")
@@ -139,7 +144,12 @@ class MigrationOrchestrator:
                 }
                 
                 # B. DEVELOPER (Write)
-                code_result = await self.developer.generate_code(task_def, self.platform_spec, schema_ref)
+                code_result = await self.developer.generate_code(
+                    task_def, 
+                    self.platform_spec, 
+                    schema_ref,
+                    knowledge_context=knowledge_context
+                )
                 notebook_content = code_result.get("notebook_content", "")
                 
                 if not notebook_content:

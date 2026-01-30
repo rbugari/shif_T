@@ -2,6 +2,8 @@ import os
 import shutil
 from typing import Dict, Any, Optional, List
 from supabase import create_client, Client
+import uuid
+
 
 class PersistenceService:
     print("LOADING PersistenceService v2 - WITH initialize_project_from_source")
@@ -218,7 +220,8 @@ class SupabasePersistence:
 
     async def get_or_create_project(self, name: str, repo_url: str = None) -> str:
         """Finds or creates a project by name and returns its UUID."""
-        res = self.client.table("projects").select("id").eq("name", name).execute()
+        res = self.client.table("projects").select("id").ilike("name", name).execute()
+
         if res.data:
             project_id = res.data[0]["id"]
             if repo_url:
@@ -240,20 +243,43 @@ class SupabasePersistence:
     async def delete_project(self, project_id: str) -> bool:
         """Deletes the project and its assets from the database."""
         try:
+            # Resolve to UUID
+            project_uuid = await self.resolve_project_id(project_id)
+            if not project_uuid:
+                return False
+                
             # Supabase should handle cascade if configured, but let's be explicit if needed.
             # Assuming 'projects' deletion deletes related 'assets' via FK cascade.
-            self.client.table("projects").delete().eq("id", project_id).execute()
+            self.client.table("projects").delete().eq("id", project_uuid).execute()
             return True
         except Exception as e:
             print(f"Error deleting project {project_id} from DB: {e}")
             return False
 
+    async def resolve_project_id(self, project_id_or_name: str) -> Optional[str]:
+        """Robustly resolves a project ID or Name/Slug to a UUID."""
+        if not project_id_or_name:
+            return None
+            
+        # 1. Try treating as UUID
+        try:
+            uuid.UUID(project_id_or_name)
+            return project_id_or_name
+        except (ValueError, TypeError):
+            pass
+            
+        # 2. Try resolving as Name/Slug
+        return await self.get_project_id_by_name(project_id_or_name)
+
+
     async def get_project_id_by_name(self, name: str) -> Optional[str]:
         """Resolves a project name (slug) to its UUID."""
-        res = self.client.table("projects").select("id").eq("name", name).execute()
+        # Use ilike for case-insensitive matching
+        res = self.client.table("projects").select("id").ilike("name", name).execute()
         if res.data:
             return res.data[0]["id"]
         return None
+
 
     async def get_project_name_by_id(self, project_id: str) -> Optional[str]:
         """Resolves a project UUID to its name."""
@@ -263,9 +289,9 @@ class SupabasePersistence:
         return None
 
     async def get_project_metadata(self, project_id: str) -> Optional[Dict[str, Any]]:
-        """Returns project metadata (name, repo_url, status, stage)."""
+        """Returns project metadata (name, repo_url, status, stage, config)."""
         try:
-            res = self.client.table("projects").select("name, repo_url, status, stage").eq("id", project_id).execute()
+            res = self.client.table("projects").select("name, repo_url, status, stage, config").eq("id", project_id).execute()
             if res.data:
                 return res.data[0]
         except Exception:
@@ -371,14 +397,13 @@ class SupabasePersistence:
     async def update_project_stage(self, project_id_or_name: str, stage: str) -> bool:
         """Updates the stage of a project. Handles both UUID and Name."""
         try:
-            # 1. Resolve to UUID if needed
-            project_uuid = project_id_or_name
-            if "-" not in project_id_or_name:
-                resolved = await self.get_project_id_by_name(project_id_or_name)
-                if resolved:
-                    project_uuid = resolved
+            # 1. Resolve to UUID
+            project_uuid = await self.resolve_project_id(project_id_or_name)
+            if not project_uuid:
+                return False
 
             self.client.table("projects").update({"stage": stage}).eq("id", project_uuid).execute()
+
             return True
         except Exception as e:
             print(f"Error updating stage for {project_id_or_name}: {e}")
@@ -388,16 +413,13 @@ class SupabasePersistence:
         """Saves the graph layout as a JSON asset. Handles both UUID and Name."""
         import json
         
-        # 1. Resolve to UUID if needed
-        project_uuid = project_id_or_name
-        if "-" not in project_id_or_name: # Simple heuristic for UUID
-            resolved = await self.get_project_id_by_name(project_id_or_name)
-            if resolved:
-                project_uuid = resolved
-            else:
-                # Fallback: Create project if it doesn't exist? 
-                # For layout save, we probably should ensure project exists.
-                project_uuid = await self.get_or_create_project(project_id_or_name)
+        # 1. Resolve to UUID
+        project_uuid = await self.resolve_project_id(project_id_or_name)
+        if not project_uuid:
+            # Fallback: Create project if it doesn't exist? 
+            # For layout save, we probably should ensure project exists.
+            project_uuid = await self.get_or_create_project(project_id_or_name)
+
 
         content = json.dumps(layout_data)
         res = self.client.table("assets").select("id").eq("project_id", project_uuid).eq("type", "LAYOUT").execute()
@@ -413,14 +435,11 @@ class SupabasePersistence:
         """Retrieves the graph layout. Handles both UUID and Name."""
         import json
 
-        # 1. Resolve to UUID if needed
-        project_uuid = project_id_or_name
-        if "-" not in project_id_or_name:
-            resolved = await self.get_project_id_by_name(project_id_or_name)
-            if resolved:
-                project_uuid = resolved
-            else:
-                return None # Not found
+        # 1. Resolve to UUID
+        project_uuid = await self.resolve_project_id(project_id_or_name)
+        if not project_uuid:
+            return None
+
 
         res = self.client.table("assets").select("content").eq("project_id", project_uuid).eq("type", "LAYOUT").execute()
         if res.data:
@@ -470,11 +489,10 @@ class SupabasePersistence:
 
     async def update_project_status(self, project_id: str, status: str) -> bool:
         """Updates the project status (TRIAGE <-> DRAFTING)."""
-        project_uuid = project_id
-        if "-" not in project_id:
-             resolved = await self.get_project_id_by_name(project_id)
-             if resolved:
-                 project_uuid = resolved
+        project_uuid = await self.resolve_project_id(project_id)
+        if not project_uuid:
+             return False
+
 
         data = {"status": status}
         if status == "DRAFTING":
@@ -487,12 +505,38 @@ class SupabasePersistence:
             print(f"Error updating status: {e}")
             return False
 
+    async def update_project_config(self, project_id: str, new_config: Dict[str, Any]) -> bool:
+        """Updates the project configuration JSONB column (Partial Merge)."""
+        project_uuid = await self.resolve_project_id(project_id)
+        if not project_uuid:
+             print(f"Error: Could not resolve project name '{project_id}' to UUID")
+             return False
+
+        
+        try:
+            print(f"DEBUG: Updating config for project {project_uuid} with: {new_config}")
+            # 1. Fetch current config
+
+            res = self.client.table("projects").select("config").eq("id", project_uuid).execute()
+            current_config = {}
+            if res.data and res.data[0].get("config"):
+                current_config = res.data[0]["config"]
+            
+            # 2. Merge
+            updated_config = {**current_config, **new_config}
+            
+            # 3. Update
+            self.client.table("projects").update({"config": updated_config}).eq("id", project_uuid).execute()
+            return True
+        except Exception as e:
+            print(f"Error updating project config: {e}")
+            return False
+
     async def get_project_status(self, project_id: str) -> str:
-         project_uuid = project_id
-         if "-" not in project_id:
-             resolved = await self.get_project_id_by_name(project_id)
-             if resolved:
-                 project_uuid = resolved
+         project_uuid = await self.resolve_project_id(project_id)
+         if not project_uuid:
+             return "TRIAGE"
+
 
          try:
              res = self.client.table("projects").select("status").eq("id", project_uuid).execute()

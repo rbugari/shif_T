@@ -1,11 +1,13 @@
 "use client";
 import { useState, useEffect } from 'react';
-import { Play, FileText, Database, GitBranch, Terminal, Layers, CheckCircle, FileCode } from 'lucide-react';
+import { Play, FileText, Database, GitBranch, Terminal, Layers, CheckCircle, FileCode, Eye, Code as CodeIcon, Maximize2, Minimize2, RefreshCw } from 'lucide-react';
 import { API_BASE_URL } from '../../lib/config';
 import CodeDiffViewer from '../CodeDiffViewer';
 import PromptsExplorer from '../PromptsExplorer';
 import LoadingOverlay from '../ui/LoadingOverlay';
 import SolutionExplorer from '../SolutionExplorer';
+import Editor from "@monaco-editor/react";
+import MarkdownPreview from "../ui/MarkdownPreview";
 
 interface RefinementViewProps {
     projectId: string;
@@ -24,6 +26,8 @@ export default function RefinementView({ projectId, onStageChange }: RefinementV
     const [isRunning, setIsRunning] = useState(false);
     const [logs, setLogs] = useState<string[]>([]);
     const [profile, setProfile] = useState<any>(null);
+    const [isFullScreen, setIsFullScreen] = useState(false);
+    const [contentViewMode, setContentViewMode] = useState<"preview" | "code">("code");
 
     // Workbench State
     const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -31,7 +35,20 @@ export default function RefinementView({ projectId, onStageChange }: RefinementV
     const [originalContent, setOriginalContent] = useState<string>("");
     const [isLoadingFile, setIsLoadingFile] = useState(false);
 
-    // State Restoration on Mount
+    // Detect language for Monaco
+    const getLanguage = (path: string | null) => {
+        if (!path) return 'text';
+        const ext = path.split('.').pop()?.toLowerCase();
+        if (ext === 'py') return 'python';
+        if (ext === 'sql') return 'sql';
+        if (ext === 'json') return 'json';
+        if (ext === 'md') return 'markdown';
+        return 'text';
+    };
+
+    const isMD = selectedFile?.endsWith('.md');
+
+    // ... (useEffect and handlers remain the same)
     useEffect(() => {
         const fetchState = async () => {
             try {
@@ -105,10 +122,14 @@ export default function RefinementView({ projectId, onStageChange }: RefinementV
     };
 
     const onFileSelectedFromExplorer = async (content: string, name: string, path: string) => {
+        setIsLoadingFile(true);
         setSelectedFile(path);
         setFileContent(content);
         setOriginalContent("");
-        setIsLoadingFile(false);
+
+        // Default View Mode
+        if (name.endsWith('.md')) setContentViewMode('preview');
+        else setContentViewMode('code');
 
         if (activeTab === 'workbench') {
             const origPath = resolveOriginalPath(path);
@@ -122,12 +143,103 @@ export default function RefinementView({ projectId, onStageChange }: RefinementV
                 }
             }
         }
+        setIsLoadingFile(false);
     };
 
     const isComplete = logs.some(l => l.includes("Pipeline Complete") || l.includes("COMPLETED"));
 
+    const viewerContent = (
+        <div className={`flex-1 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden shadow-lg ${isFullScreen ? "rounded-none border-none shadow-none" : ""}`}>
+            <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-900/50 shrink-0">
+                <h3 className="font-bold text-sm flex items-center gap-2">
+                    <FileText size={16} className="text-primary" />
+                    {selectedFile ? (
+                        <span>
+                            {selectedFile.split(/[\\/]/).pop()}
+                            {selectedFile.includes("Bronze") && <span className="ml-2 text-[10px] bg-orange-100 text-orange-800 px-1 rounded border border-orange-200">BRONZE</span>}
+                            {selectedFile.includes("Silver") && <span className="ml-2 text-[10px] bg-gray-100 text-gray-800 px-1 rounded border border-gray-200">SILVER</span>}
+                            {selectedFile.includes("Gold") && <span className="ml-2 text-[10px] bg-yellow-100 text-yellow-800 px-1 rounded border border-yellow-200">GOLD</span>}
+                        </span>
+                    ) : "Select a file"}
+                </h3>
+
+                <div className="flex items-center gap-4">
+                    {activeTab === 'artifacts' && isMD && (
+                        <div className="flex bg-white dark:bg-gray-800 p-1 rounded-lg border border-gray-200 dark:border-gray-700">
+                            <button
+                                onClick={() => setContentViewMode("preview")}
+                                className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-[10px] font-bold transition-all ${contentViewMode === "preview"
+                                    ? "bg-primary text-white shadow-sm"
+                                    : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                                    }`}
+                            >
+                                <Eye size={12} /> VIEW
+                            </button>
+                            <button
+                                onClick={() => setContentViewMode("code")}
+                                className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-[10px] font-bold transition-all ${contentViewMode === "code"
+                                    ? "bg-primary text-white shadow-sm"
+                                    : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                                    }`}
+                            >
+                                <CodeIcon size={12} /> CODE
+                            </button>
+                        </div>
+                    )}
+
+                    <button
+                        onClick={() => setIsFullScreen(!isFullScreen)}
+                        className="p-1.5 text-gray-500 hover:text-primary transition-colors bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700"
+                        title={isFullScreen ? "Reduce" : "Expand"}
+                    >
+                        {isFullScreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                    </button>
+
+                    {selectedFile && <span className="text-xs text-gray-400 font-mono truncate max-w-[300px] hidden xl:block">{selectedFile}</span>}
+                </div>
+            </div>
+
+            <div className="flex-1 overflow-hidden relative">
+                {isLoadingFile ? (
+                    <div className="flex items-center justify-center h-full text-gray-500">Loading content...</div>
+                ) : selectedFile ? (
+                    activeTab === 'workbench' ? (
+                        <CodeDiffViewer originalCode={originalContent} modifiedCode={fileContent} />
+                    ) : (
+                        contentViewMode === 'code' ? (
+                            <Editor
+                                height="100%"
+                                theme="vs-dark"
+                                defaultLanguage={getLanguage(selectedFile)}
+                                value={fileContent}
+                                options={{
+                                    readOnly: true,
+                                    minimap: { enabled: true },
+                                    fontSize: isFullScreen ? 14 : 13,
+                                    wordWrap: "on",
+                                    automaticLayout: true,
+                                    padding: { top: 20 },
+                                    scrollBeyondLastLine: false
+                                }}
+                            />
+                        ) : (
+                            <div className={`h-full overflow-auto bg-white dark:bg-gray-950 custom-scrollbar ${isFullScreen ? "p-16 px-24" : "p-10"}`}>
+                                <MarkdownPreview content={fileContent} />
+                            </div>
+                        )
+                    )
+                ) : (
+                    <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
+                        <Layers size={48} className="text-gray-700/20" />
+                        <p>Select a file to inspect generated code.</p>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+
     return (
-        <div className="flex flex-col h-full bg-gray-50 dark:bg-gray-900">
+        <div className="flex flex-col h-full bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800">
             {/* Header Tabs */}
             <div className="flex items-center px-4 bg-white dark:bg-gray-950 border-b border-gray-200 dark:border-gray-800">
                 {TABS.map(tab => (
@@ -148,7 +260,7 @@ export default function RefinementView({ projectId, onStageChange }: RefinementV
             </div>
 
             {/* Content Area */}
-            <div className="flex-1 p-8 overflow-hidden">
+            <div className="flex-1 p-6 overflow-hidden">
                 {activeTab === 'orchestrator' && (
                     <div className="max-w-4xl mx-auto space-y-6 flex flex-col h-full">
                         <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-700 flex justify-between items-center shrink-0">
@@ -175,26 +287,27 @@ export default function RefinementView({ projectId, onStageChange }: RefinementV
                             </div>
                         </div>
 
-                        <div className="flex-1 bg-black text-green-400 rounded-xl p-6 font-mono text-sm overflow-y-auto shadow-inner border border-gray-800 min-h-0">
+                        <div className="flex-1 bg-black text-green-400 rounded-xl p-6 font-mono text-sm overflow-y-auto shadow-inner border border-gray-800 min-h-0 custom-scrollbar">
                             <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-2">
-                                <span className="font-bold text-gray-400">AGENT LOGS</span>
+                                <span className="font-bold text-gray-400 uppercase tracking-widest text-[10px]">Agent Logs</span>
+                                {isRunning && <RefreshCw size={14} className="animate-spin text-gray-500" />}
                             </div>
                             <div className="space-y-2">
                                 {logs.length === 0 && <span className="text-gray-600 italic">Waiting for command...</span>}
                                 {logs.map((line: string, i: number) => (
-                                    <div key={i} className="whitespace-pre-wrap border-l-2 border-transparent pl-2 hover:border-gray-700 transition-colors">{`> ${line}`}</div>
+                                    <div key={i} className="whitespace-pre-wrap border-l-2 border-transparent pl-2 hover:border-gray-700 transition-colors opacity-80 hover:opacity-100">{`> ${line}`}</div>
                                 ))}
                             </div>
                         </div>
 
                         {profile && (
                             <div className="grid grid-cols-2 gap-4 shrink-0">
-                                <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border border-gray-200 shadow-sm">
-                                    <h3 className="font-bold text-gray-500 text-xs uppercase mb-2">Files Analyzed</h3>
+                                <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border border-gray-200 shadow-sm border-l-4 border-l-primary">
+                                    <h3 className="font-bold text-gray-500 text-[10px] uppercase mb-1 tracking-widest">Files Analyzed</h3>
                                     <p className="text-2xl font-bold text-primary">{profile.total_files}</p>
                                 </div>
-                                <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border border-gray-200 shadow-sm">
-                                    <h3 className="font-bold text-gray-500 text-xs uppercase mb-2">Shared Connections</h3>
+                                <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border border-gray-200 shadow-sm border-l-4 border-l-orange-500">
+                                    <h3 className="font-bold text-gray-500 text-[10px] uppercase mb-1 tracking-widest">Shared Connections</h3>
                                     <p className="text-2xl font-bold text-orange-500">{Object.keys(profile.shared_connections || {}).length}</p>
                                 </div>
                             </div>
@@ -203,59 +316,29 @@ export default function RefinementView({ projectId, onStageChange }: RefinementV
                 )}
 
                 {activeTab === 'prompts' && (
-                    <div className="h-full bg-white dark:bg-gray-950 p-6 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
-                        <div className="mb-6">
-                            <h2 className="text-xl font-bold flex items-center gap-2"><Terminal className="text-primary" /> Intelligence Hub</h2>
-                            <p className="text-gray-500 text-sm">System Prompts for cross-phase orchestration.</p>
-                        </div>
-                        <PromptsExplorer />
+                    <div className="h-full bg-white dark:bg-gray-950 p-6 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm overflow-hidden">
+                        <PromptsExplorer projectId={projectId} />
                     </div>
                 )}
 
                 {(activeTab === 'workbench' || activeTab === 'artifacts') && (
-                    <div className="flex h-full gap-4">
-                        <div className="w-1/4 h-full">
+                    <div className="flex h-full gap-4 overflow-hidden relative">
+                        <div className={`w-1/4 h-full transition-all duration-300 ${isFullScreen ? "w-0 opacity-0 overflow-hidden" : ""}`}>
                             <SolutionExplorer
                                 projectId={projectId}
                                 onFileSelect={onFileSelectedFromExplorer}
                             />
                         </div>
 
-                        <div className="flex-1 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden shadow-lg">
-                            <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-900/50">
-                                <h3 className="font-bold text-sm flex items-center gap-2">
-                                    <FileText size={16} className="text-primary" />
-                                    {selectedFile ? (
-                                        <span>
-                                            {selectedFile.split(/[\\/]/).pop()}
-                                            {selectedFile.includes("Bronze") && <span className="ml-2 text-[10px] bg-orange-100 text-orange-800 px-1 rounded border border-orange-200">BRONZE</span>}
-                                            {selectedFile.includes("Silver") && <span className="ml-2 text-[10px] bg-gray-100 text-gray-800 px-1 rounded border border-gray-200">SILVER</span>}
-                                            {selectedFile.includes("Gold") && <span className="ml-2 text-[10px] bg-yellow-100 text-yellow-800 px-1 rounded border border-yellow-200">GOLD</span>}
-                                        </span>
-                                    ) : "Select a file"}
-                                </h3>
-                                {selectedFile && <span className="text-xs text-gray-400 font-mono truncate max-w-[300px]">{selectedFile}</span>}
+                        {isFullScreen ? (
+                            <div className="fixed inset-0 z-[9999] bg-white dark:bg-black p-4 md:p-10 animate-in fade-in zoom-in duration-300">
+                                <div className="max-w-7xl mx-auto h-full shadow-2xl rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 flex flex-col">
+                                    {viewerContent}
+                                </div>
                             </div>
-
-                            <div className="flex-1 overflow-auto relative bg-[#1e1e1e]">
-                                {isLoadingFile ? (
-                                    <div className="flex items-center justify-center h-full text-gray-500">Loading content...</div>
-                                ) : selectedFile ? (
-                                    activeTab === 'workbench' ? (
-                                        <CodeDiffViewer originalCode={originalContent} modifiedCode={fileContent} />
-                                    ) : (
-                                        <div className="p-4 text-gray-200 font-mono text-sm leading-relaxed h-full overflow-auto">
-                                            <pre className="whitespace-pre-wrap">{fileContent}</pre>
-                                        </div>
-                                    )
-                                ) : (
-                                    <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
-                                        <Layers size={48} className="text-gray-700/20" />
-                                        <p>Select a file to inspect generated code.</p>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
+                        ) : (
+                            viewerContent
+                        )}
                     </div>
                 )}
             </div>

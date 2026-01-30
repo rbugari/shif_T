@@ -10,7 +10,7 @@ from pyspark.sql.types import *
 from pyspark.sql.window import Window
 
 # 2. Reading Bronze / Source
-# JDBC connection details (use dbutils.secrets for credentials)
+# JDBC connection details (use Databricks secrets)
 db_url = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-url")
 db_user = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-user")
 db_password = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-password")
@@ -24,7 +24,7 @@ FROM Sales.Customers
 WHERE custid > {custid_threshold}
 """
 
-# Read source data explicitly via JDBC
+# Read source data via JDBC
 source_df = (
     spark.read.format("jdbc")
     .option("url", db_url)
@@ -36,7 +36,7 @@ source_df = (
 )
 
 # 3. Transformations (Apply Logic)
-# No lookups specified. Direct mapping.
+# No lookups or complex transforms per task definition
 
 # 3.1 Surrogate Key Generation (STABLE & IDEMPOTENT)
 # SAFE MIGRATION PATTERN: Lookup existing keys, generate new ones only for new members.
@@ -53,7 +53,7 @@ except Exception:
     max_sk = 0
 
 # 2. Join Source with Target to find existing SKs
-if df_target is not None:
+if df_target:
     df_joined = source_df.join(df_target, on=bk_cols, how="left")
 else:
     df_joined = source_df.withColumn(sk_col, lit(None).cast("integer"))
@@ -89,7 +89,7 @@ def ensure_unknown_member(df):
 customer_df = ensure_unknown_member(customer_df)
 
 # 4. Mandatory Type Casting (STRICT)
-# Define target schema types explicitly (example, adjust as per actual schema)
+# Define target schema (as per platform rules and best practice)
 target_schema = [
     {"name": "CustomerKey", "type": "INTEGER"},
     {"name": "custid", "type": "INTEGER"},
@@ -100,7 +100,6 @@ target_schema = [
     {"name": "phone", "type": "STRING"},
     {"name": "postalcode", "type": "STRING"}
 ]
-
 for field in target_schema:
     col_name = field["name"]
     target_type = field["type"]
@@ -108,17 +107,15 @@ for field in target_schema:
         customer_df = customer_df.withColumn(col_name, col(col_name).cast(target_type))
 
 # 5. Writing to Silver/Gold (Apply Platform Pattern)
-# Overwrite/merge logic for dimension table
-# Use Delta Lake MERGE for idempotency
+# Overwrite/merge into DimCustomer table (idempotent)
+# Use Delta Lake MERGE for SCD Type 2 if needed, but here it's a dimension load (no SCD logic required)
+(
+    customer_df.write
+    .format("delta")
+    .mode("overwrite")
+    .option("overwriteSchema", "true")
+    .saveAsTable(target_table_name)
+)
 
-delta_target = DeltaTable.forName(spark, target_table_name)
-
-# Prepare staged DataFrame for merge
-staged_df = customer_df
-
-# Merge logic: Insert new, update existing
-# For simple dimension, match on Business Key (custid)
-delta_target.alias("target").merge(
-    staged_df.alias("stage"),
-    "target.custid = stage.custid"
-).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
+# 6. Optimization (Z-ORDER)
+spark.sql(f"OPTIMIZE {target_table_name} ZORDER BY (custid)")

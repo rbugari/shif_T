@@ -1,6 +1,6 @@
-# Shift-T (Release R1.1) - Modernization Platform
+# Shift-T (Release R1.2) - Modernization Platform
 
-Shift-T is an AI-powered agentic platform designed to automate the migration of legacy SSIS packages to modern PySpark/Databricks architectures using an Execution Mesh approach.
+Shift-T is an AI-powered agentic platform designed to automate the migration of legacy data technologies (SSIS, SQL Server, Oracle, MySQL) to modern PySpark/Databricks architectures using an **Execution Mesh** and **Knowledge Driver** system.
 
 ## 🚀 Quick Start
 
@@ -10,48 +10,40 @@ To start the entire platform (Backend + Frontend), simply run:
 python run.py
 ```
 
-This script will start the FastAPI backend (Port 8000), the Next.js frontend (Port 3001), and open your dashboard.
+This script will start the FastAPI backend (Port 8000) and the Next.js frontend (Port 3001).
 
-## ✨ New in R1.1
+## ✨ New in R1.2 (Premium Experience)
 
--   **Integrated Help Center:** New `/docs` page with deep technical deep dives, interactive I/O tables, and architectural diagrams.
--   **Triage Report (PDF):** One-click generation of professional PDF reports summarizing discovery, gaps, and inventory.
--   **Unified Solution Explorer:** Consistent file tree navigation across all stages (Drafting, Refinement, Governance) with real-time file previews.
--   **UUID Support:** Improved backend folder sanitization to support project names and UUIDs seamlessly.
+-   **Multi-Technology Core:** Automatic detection and handling of dialects (T-SQL, PL/SQL, MySQL) via the new **Knowledge Driver** system.
+-   **Monaco Editor Integration:** Professional syntax highlighting for Python, SQL, and JSON across all views.
+-   **Integrated Markdown Preview:** Seamlessly toggle between rendered documentation and raw code source.
+-   **Fullscreen Mode:** Immersive work environment for auditing prompts and complex architecture graphs.
+-   **Intelligence Hub:** Real-time visibility into AI compiled prompts and system knowledge injection.
+-   **6-Stage Lifecycle:** Enhanced end-to-end workflow from Discovery to Solution Export.
 
-## ✨ Key Features (Mesh & Discovery)
+## ✨ Key Features
 
--   **Interactive Execution Mesh:** Dynamic graph visualization using React Flow and Dagre for auto-layout.
--   **Collapsible Workspace:** Hide/Show the assets sidebar to maximize architecture design space.
--   **Fullscreen Mode:** Dedicated "Maximize" view for immersive graph editing.
--   **Smart Triage:** Intelligent classification (CORE, SUPPORT, IGNORED) and dependency inference.
--   **Project Reset:** Ability to purge discovery data and restart the analysis from scratch.
--   **Editable Grid:** Mass-edit categories and sync changes instantly with the visual graph.
--   **Migration Persistence:** Real-time log persistence to view historical execution results (Log Replay).
--   **Workflow Toolbar:** Seamless stage transitions with "Approve & Refine" actions.
-
-## 📋 Prerequisites
--   Python 3.11+
--   Node.js 18+
--   Supabase Project (configured in `.env`)
--   Azure OpenAI Key (configured in `.env`)
+-   **Interactive Execution Mesh:** Dynamic graph visualization using React Flow.
+-   **Smart Triage:** Intelligent classification (CORE, SUPPORT, IGNORED) and gap analysis.
+-   **Medallion Auto-Optimizer:** Automated refactoring to Bronze, Silver, and Gold architectural layers.
+-   **Column-Level Lineage:** Automatic traceability from source field to target column.
+-   **Professional PDF Reporting:** Generative summaries for executives and technical leads.
 
 ## 🛠️ Components
--   **Frontend**: Next.js 14, React Flow (Mesh Design), Tailwind CSS.
--   **Backend**: FastAPI, Dagre (Layout Engine), Supabase.
+-   **Frontend**: Next.js 14, React Flow, Monaco Editor, Tailwind CSS.
+-   **Backend**: FastAPI, LangGraph (Agent Orchestration), SqlGlot.
 -   **Agents**:
-    -   **Agent A (Mesh Architect)**: Discovery and topology inference.
-    -   **Agent C (Interpreter)**: Code transpilation to PySpark.
-    -   **Agent F (Critic)**: Validation and optimization.
+    -   **Agent A (Librarian)**: Discovery & Triage.
+    -   **Agent B (Cartographer)**: Topology & Mesh.
+    -   **Agent C (Interpreter)**: Code Transpilation.
+    -   **Agent F (Critic)**: Refinement & Medallion.
+    -   **Agent G (Auditor)**: Governance & Compliance.
 
 ## 📖 Documentation
-Detailed guides are available in the `/docs` folder:
--   [Fase 1: Triage & Discovery](docs/PHASE_1_TRIAGE.md)
--   [Fase 2: Drafting & Code Generation](docs/PHASE_2_DRAFTING.md)
--   [Fase 3: Refinement & Medallion Architecture](docs/PHASE_3_REFINEMENT.md)
--   [Fase 4: Governance & Compliance](docs/PHASE_4_GOVERNANCE.md)
+Explore our comprehensive [Documentation Center](docs/README.md):
+-   [**Knowledge Drivers Architecture**](docs/knowledge_drivers.md)
+-   [**The 6-Stage Migration Lifecycle**](docs/README.md#🚀-ciclo-de-vida-6-stages)
 -   [Technical Specification](docs/SPECIFICATION.md)
--   [User Help Center](http://localhost:3001/docs) (Running app)
 
 ---
 *Shift-T: Automating de-complexification.*

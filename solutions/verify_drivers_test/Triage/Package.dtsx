@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<DTS:Executable xmlns:DTS="www.microsoft.com/SqlServer/Dts"
+  DTS:refId="Package"
+  DTS:CreationDate="1/29/2026 5:00:00 PM"
+  DTS:CreationName="SSIS.Package.3"
+  DTS:CreatorComputerName="PC"
+  DTS:CreatorName="User"
+  DTS:DTSID="{DUMMY-GUID}"
+  DTS:ExecutableType="SSIS.Package.3"
+  DTS:LastModifiedProductVersion="11.0.2100.60"
+  DTS:LocaleID="1033"
+  DTS:ObjectName="Package"
+  DTS:PackageType="5"
+  DTS:VersionBuild="1"
+  DTS:VersionGUID="{DUMMY-VERSION-GUID}">
+  <DTS:Property DTS:Name="PackageFormatVersion">6</DTS:Property>
+  <DTS:Executable
+    DTS:refId="Package\Data Flow Task"
+    DTS:CreationName="SSIS.Pipeline.3"
+    DTS:DTSID="{DUMMY-TASK-GUID}"
+    DTS:ExecutableType="SSIS.Pipeline.3"
+    DTS:LocaleID="-1"
+    DTS:ObjectName="Data Flow Task"
+    DTS:TaskContact="Performs high-performance data extraction, transformation and loading;Microsoft Corporation; Microsoft SQL Server; (C) 2007 Microsoft Corporation; All Rights Reserved;http://www.microsoft.com/sql/support/default.asp;1">
+      <DTS:ObjectData>
+        <pipeline
+          version="1">
+          <components>
+            <component
+              refId="Package\Data Flow Task\OLE DB Source"
+              componentClassID="{165A5430-D5DA-48E8-9F7C-123456789012}"
+              contactInfo="OLE DB Source;Microsoft Corporation; Microsoft SQL Server; (C) Microsoft Corporation; All Rights Reserved; http://www.microsoft.com/sql/support;7"
+              description="OLE DB Source"
+              name="OLE DB Source"
+              usesDispositions="true"
+              version="7">
+            </component>
+          </components>
+        </pipeline>
+      </DTS:ObjectData>
+  </DTS:Executable>
+</DTS:Executable>

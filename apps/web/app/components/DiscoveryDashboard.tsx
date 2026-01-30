@@ -5,9 +5,10 @@ import { BarChart3, Database, AlertCircle, Cpu } from 'lucide-react';
 interface DiscoveryDashboardProps {
     assets: any[];
     nodes: any[];
+    sourceTech?: string;
 }
 
-export default function DiscoveryDashboard({ assets, nodes }: DiscoveryDashboardProps) {
+export default function DiscoveryDashboard({ assets, nodes, sourceTech }: DiscoveryDashboardProps) {
     const total = assets.length;
     const coreCount = assets.filter(a => a.type === 'CORE' || a.category === 'CORE').length;
     const highComplexity = assets.filter(a => a.complexity === 'HIGH').length;
@@ -18,8 +19,13 @@ export default function DiscoveryDashboard({ assets, nodes }: DiscoveryDashboard
 
     return (
         <div className="space-y-4 p-4 bg-gray-50 dark:bg-gray-900/50 rounded-xl border border-gray-100 dark:border-gray-800">
-            <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                <BarChart3 size={12} /> Discovery Metrics
+            <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center justify-between gap-2">
+                <span className="flex items-center gap-2"><BarChart3 size={12} /> Discovery Metrics</span>
+                {sourceTech && (
+                    <span className="px-2 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 rounded text-[9px] font-bold border border-blue-200 dark:border-blue-800">
+                        {sourceTech}
+                    </span>
+                )}
             </h3>
 
             <div className="grid grid-cols-2 gap-3">

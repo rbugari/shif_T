@@ -12,6 +12,8 @@ from services.graph_service import GraphService
 from services.agent_c_service import AgentCService
 from services.agent_f_service import AgentFService
 from services.agent_g_service import AgentGService
+from services.developer_service import DeveloperService
+from config.platform_spec import PlatformSpec
 from services.persistence_service import PersistenceService, SupabasePersistence
 from services.discovery_service import DiscoveryService
 from services.refinement.governance_service import GovernanceService
@@ -34,24 +36,40 @@ app.add_middleware(
 )
 
 @app.get("/prompts/agent-a")
-async def get_agent_a_prompt():
+async def get_agent_a_prompt(project_id: Optional[str] = None, compiled: bool = False):
     """Returns the current default system prompt for Agent A."""
     agent_a = AgentAService()
+    if compiled and project_id:
+        knowledge_context = DiscoveryService.get_global_knowledge_context()
+        return {"prompt": agent_a.compile_prompt(knowledge_context)}
     return {"prompt": agent_a._load_prompt()}
 
 @app.get("/prompts/agent-c")
-async def get_agent_c_prompt():
+async def get_agent_c_prompt(project_id: Optional[str] = None, compiled: bool = False):
+    if compiled and project_id:
+        dev_service = DeveloperService()
+        platform_spec = PlatformSpec().load_platform_spec()
+        knowledge_context = DiscoveryService.get_global_knowledge_context()
+        return {"prompt": dev_service.compile_prompt(platform_spec, knowledge_context)}
     agent_c = AgentCService()
     return {"prompt": agent_c._load_prompt()}
 
 @app.get("/prompts/agent-f")
-async def get_agent_f_prompt():
+async def get_agent_f_prompt(project_id: Optional[str] = None, compiled: bool = False):
     agent_f = AgentFService()
+    if compiled and project_id:
+        platform_spec = PlatformSpec().load_platform_spec()
+        return {"prompt": agent_f.compile_prompt(platform_spec)}
     return {"prompt": agent_f._load_prompt()}
 
 @app.get("/prompts/agent-g")
-async def get_agent_g_prompt():
+async def get_agent_g_prompt(project_id: Optional[str] = None, compiled: bool = False):
     agent_g = AgentGService()
+    if compiled and project_id:
+        db = SupabasePersistence()
+        resolved_uuid = await db.resolve_project_id(project_id)
+        project_name = await db.get_project_name_by_id(resolved_uuid) if resolved_uuid else project_id
+        return {"prompt": agent_g.compile_prompt(project_name)}
     return {"prompt": agent_g._load_prompt()}
 
 @app.get("/ping")
@@ -257,15 +275,44 @@ async def patch_asset(asset_id: str, updates: Dict[str, Any]):
     success = await db.update_asset_metadata(asset_id, updates)
     return {"success": success}
 
+@app.get("/projects/{project_id}/logs")
+async def get_project_logs(project_id: str, type: str = "migration"):
+    """Returns the content of a log file. type='migration' or 'triage'."""
+    db = SupabasePersistence()
+    
+    # Standardized Resolution
+    resolved_uuid = await db.resolve_project_id(project_id)
+    if not resolved_uuid:
+        return {"logs": "[Error] Project not found"}
+        
+    project_name = project_id
+    resolved_name = await db.get_project_name_by_id(resolved_uuid)
+    if resolved_name:
+        project_name = resolved_name
+    
+    filename = "migration.log"
+    if type == "triage":
+        filename = "triage.log"
+
+    try:
+        full_path = os.path.join(PersistenceService.ensure_solution_dir(project_name), filename)
+        content = PersistenceService.read_file_content(project_name, full_path)
+        return {"logs": content}
+    except (FileNotFoundError, ValueError):
+        return {"logs": ""} # File likely doesn't exist yet
+    except Exception as e:
+        return {"logs": f"Error reading logs: {e}"}
+
+
 @app.get("/projects/{project_id}/assets")
 async def get_project_assets(project_id: str):
     """Returns a scanned inventory of project assets."""
     db = SupabasePersistence()
     # We return the PERSISTED assets from the DB.
-    resolved_uuid = project_id
-    if "-" not in project_id: # Heuristic for UUID
-        u = await db.get_project_id_by_name(project_id)
-        if u: resolved_uuid = u
+    resolved_uuid = await db.resolve_project_id(project_id)
+    if not resolved_uuid:
+        return {"assets": [], "error": "Project not found"}
+
             
     assets = await db.get_project_assets(resolved_uuid)
     return {"assets": assets}
@@ -280,17 +327,16 @@ async def run_triage(project_id: str, params: TriageParams):
     db = SupabasePersistence()
     
     # Resolve UUID and Name correctly
-    project_uuid = project_id
+    project_uuid = await db.resolve_project_id(project_id)
+    if not project_uuid:
+        return {"error": f"Project '{project_id}' not found"}
+        
     project_folder = project_id
-    
-    if "-" in project_id: # Heuristic: if UUID, get name for folder
-        resolved_name = await db.get_project_name_by_id(project_id)
-        if resolved_name:
-            project_folder = resolved_name
-    else: # If name, get UUID for DB operations
-        resolved_uuid = await db.get_project_id_by_name(project_id)
-        if resolved_uuid:
-            project_uuid = resolved_uuid
+    # Always try to get the real name for the folder to ensure FS consistency
+    resolved_name = await db.get_project_name_by_id(project_uuid)
+    if resolved_name:
+        project_folder = resolved_name
+
 
     # GOVERNANCE CHECK: TRIAGE is only allowed in TRIAGE mode.
     current_status = await db.get_project_status(project_uuid)
@@ -301,22 +347,76 @@ async def run_triage(project_id: str, params: TriageParams):
             "error": "Project is in DRAFTING mode"
         }
 
+    # Setup Real-time Logging
+    log_file_path = os.path.join(PersistenceService.ensure_solution_dir(project_folder), "triage.log")
+    # Clear existing log
+    with open(log_file_path, "w", encoding="utf-8") as f:
+        f.write("")
+
     log_lines = []
-    log_lines.append(f"[Start] Initializing Shift-T Triage Agent for Project: {project_id} (Folder: {project_folder})")
+    
+    def log_step(msg: str):
+        log_lines.append(msg)
+        # Real-time append to file
+        with open(log_file_path, "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+
+    log_step(f"[Start] Initializing Shift-T Triage Agent for Project: {project_id} (Folder: {project_folder})")
     
     # 1. Deep Scan (The Scanner / Pre-processing)
-    log_lines.append("[Step 1] Running Deep Scanner (Python Engine)...")
-    manifest = DiscoveryService.generate_manifest(project_folder)
+    log_step("[Step 1] Running Deep Scanner (Python Engine)...")
+    from fastapi.concurrency import run_in_threadpool
+    manifest = await run_in_threadpool(DiscoveryService.generate_manifest, project_folder)
     
     file_count = len(manifest["file_inventory"])
     tech_stats = manifest["tech_stats"]
-    log_lines.append(f"   > Scanned {file_count} files.")
-    log_lines.append(f"   > Tech Stack Detected: {tech_stats}")
     
+    # 1.1 Primary Technology Detection & Suggestions
+    detected_source = None
+    print(f"DEBUG: Triage Tech Stats: {tech_stats}")
+
+    if tech_stats.get('dtsx'):
+        detected_source = "SSIS"
+    elif tech_stats.get('sql'):
+        # Check signatures of .sql files to refine the guess
+        sql_signatures = []
+        for item in manifest["file_inventory"]:
+             if item['type'] == 'SQL_SCRIPT':
+                 sql_signatures.extend(item['signatures'])
+        
+        print(f"DEBUG: SQL Signatures found: {sql_signatures}")
+
+        if any("Oracle" in s for s in sql_signatures): detected_source = "ORACLE"
+        elif any("MySQL" in s for s in sql_signatures): detected_source = "MYSQL"
+        elif any("SQL Server" in s for s in sql_signatures): detected_source = "SQL_SERVER"
+        else: detected_source = "SQL_SERVER" # Default for .sql
+    
+    print(f"DEBUG: Final Detected Source: {detected_source}")
+
+    # Suggest & Auto-Update
+    metadata = await db.get_project_metadata(project_uuid)
+    current_config = metadata.get("config") or {}
+    current_source = current_config.get("source_tech")
+    
+    print(f"DEBUG: Current Config Source: {current_source}")
+
+    suggested_source_tech = None
+
+    if detected_source:
+        # Always suggest if mismatch, do not auto-update even if empty
+        if current_source != detected_source:
+            log_step(f"   > [INFO] Technology Detected: {detected_source}. Configured: {current_source}. Suggesting update.")
+            suggested_source_tech = detected_source
+
+    # Format tech stats for log
+    tech_summary = ", ".join([f"{count} {ext.upper()}" for ext, count in tech_stats.items()])
+    log_step(f"   > Scanned {file_count} files.")
+    log_step(f"   > Tech Stack Detected: {tech_summary or 'No specific technology detected'}")
+
     # 2. Agent A Analysis (The Detective)
-    log_lines.append("[Step 2] Invoking Agent A (Mesh Architect)...")
+    log_step("[Step 2] Invoking Agent A (Mesh Architect)...")
     if params.system_prompt:
-        log_lines.append("   > Applying custom System Prompt override.")
+        log_step("   > Applying custom System Prompt override.")
     
     agent_a = AgentAService()
     try:
@@ -329,27 +429,43 @@ async def run_triage(project_id: str, params: TriageParams):
         result = await agent_a.analyze_manifest(manifest, system_prompt_override=prompt)
         
         if "error" in result:
-            log_lines.append(f"   [WARNING] Agent A returned an error: {result['error']}")
+            log_step(f"   [WARNING] Agent A returned an error: {result['error']}")
             if "raw_response" in result:
-                 log_lines.append(f"   [DEBUG] Raw Response Snippet: {result['raw_response'][:200]}...")
+                 log_step(f"   [DEBUG] Raw Response Snippet: {result['raw_response'][:200]}...")
 
         mesh_graph = result.get("mesh_graph", {})
         nodes = mesh_graph.get("nodes", [])
         edges = mesh_graph.get("edges", [])
         
-        log_lines.append(f"   > Agent Analysis Complete.")
-        log_lines.append(f"   > Identified {len(nodes)} Functional Nodes and {len(edges)} Dependencies.")
+        log_step(f"   > Agent Analysis Complete.")
+        log_step(f"   > Identified {len(nodes)} Functional Nodes and {len(edges)} Dependencies.")
         
         if len(nodes) == 0:
-            log_lines.append("   [CRITICAL] No functional nodes identified. Check manifest size or LLM constraints.")
+            log_step("   [CRITICAL] No functional nodes identified. Check manifest size or LLM constraints.")
 
         # Log Observations
         obs = result.get("triage_observations", [])
         for o in obs:
-            log_lines.append(f"   [OBSERVATION] {o}")
+            log_step(f"   [OBSERVATION] {o}")
+
+        # --- PERSIST AI INSIGHTS TO PROJECT CONFIG ---
+        ai_insights = {
+            "solution_summary": result.get("solution_summary", ""),
+            "triage_observations": result.get("triage_observations", []),
+            "critical_questions": result.get("critical_questions", []),
+            "gaps": result.get("gaps", []),
+            "triage_metadata": {
+                "detected_paradigm": result.get("detected_paradigm", "ETL"),
+                "total_assets_scanned": len(manifest.get("file_inventory", [])),
+                "core_targets": len([n for n in nodes if n.get("category") == "CORE"])
+            }
+        }
+        await db.update_project_config(project_uuid, ai_insights)
+
             
     except Exception as e:
-        log_lines.append(f"[ERROR] Agent A Failed: {str(e)}")
+
+        log_step(f"[ERROR] Agent A Failed: {str(e)}")
         return {
             "assets": [],
             "log": "\n".join(log_lines),
@@ -357,7 +473,7 @@ async def run_triage(project_id: str, params: TriageParams):
         }
 
     # 3. Persistence (Supabase)
-    log_lines.append("[Step 3] Persisting Mesh Graph and Discovered Assets...")
+    log_step("[Step 3] Persisting Mesh Graph and Discovered Assets...")
     
     # NEW: Persist the scanner inventory to DB
     db_assets = []
@@ -371,13 +487,19 @@ async def run_triage(project_id: str, params: TriageParams):
             # Fallback for files not analyzed by Agent A
             category = DiscoveryService._map_extension_to_type(item["name"].split('.')[-1].lower() if '.' in item["name"] else 'none')
 
+        # Prepare Metadata (Drivers + Agent Intelligence)
+        asset_metadata = item.get("metadata", {})
+        if agent_node and "technical_summary" in agent_node:
+            asset_metadata["technical_summary"] = agent_node["technical_summary"]
+
         db_assets.append({
             "filename": item["name"],
             "type": category,
             "source_path": item["path"],
-            # Important: Select any asset that is not IGNORED (matches graph eligibility)
+            "metadata": asset_metadata,  # Store the rich technical info
             "selected": True if category != "IGNORED" else False
         })
+
     
     # Clean up old assets before saving new ones to prevent accumulation/duplicates
     # Inlining the delete to avoid AttributeError if server didn't reload PersistenceService
@@ -388,7 +510,9 @@ async def run_triage(project_id: str, params: TriageParams):
 
     saved_assets = await db.batch_save_assets(project_uuid, db_assets)
     # Create lookup map for UUIDs: source_path -> id
+    # Create lookup map for UUIDs: source_path -> id AND source_path -> filename
     asset_map = { a["source_path"]: a["id"] for a in saved_assets }
+    pname_map = { a["source_path"]: a["filename"] for a in saved_assets }
 
     
     # Transform Agent Nodes to ReactFlow Nodes (basic)
@@ -400,12 +524,15 @@ async def run_triage(project_id: str, params: TriageParams):
         # Find UUID for this node
         n_uuid = asset_map.get(n["id"], n["id"]) # Fallback to path if not found (shouldn't happen)
         
+        # FIX: Use Filename if available, fallback to Agent Label
+        display_label = pname_map.get(n["id"], n["label"])
+
         rf_nodes.append({
             "id": n_uuid, # Use UUID for Graph Nodes too!
             "type": "custom", 
             "position": {"x": 200 + (i % 5 * 250), "y": 100 + (i // 5 * 150)}, # Better grid-like layout
             "data": { 
-                "label": n["label"], 
+                "label": display_label, 
                 "category": n.get("category", "CORE"),
                 "complexity": n.get("complexity", "LOW"),
                 "status": "pending"
@@ -426,7 +553,7 @@ async def run_triage(project_id: str, params: TriageParams):
         })
         
     await db.save_project_layout(project_uuid, {"nodes": rf_nodes, "edges": rf_edges})
-    log_lines.append("[Success] Graph and Assets saved to database.")
+    log_step("[Success] Graph and Assets saved to database.")
     
     # Map back to assets list for the grid view
     # We merge the scanner inventory with agent intelligence
@@ -452,7 +579,8 @@ async def run_triage(project_id: str, params: TriageParams):
         "assets": final_assets,
         "nodes": rf_nodes,
         "edges": rf_edges,
-        "log": "\n".join(log_lines)
+        "log": "\n".join(log_lines),
+        "suggested_source_tech": suggested_source_tech
     }
 
 @app.post("/transpile/optimize")
@@ -481,26 +609,26 @@ async def export_solution(id: str):
 async def list_projects():
     """Returns a list of all projects."""
     db = SupabasePersistence()
-    return await db.list_projects()
+    res = db.client.table("projects").select("*, assets_count:assets(count)").execute()
+    # Post-process count if needed, or rely on Supabase alias
+    return res.data if res.data else []
 
 @app.get("/projects/{project_id}")
 async def get_project_details(project_id: str):
     """Returns project details (name, repo_url, etc.) by ID."""
     db = SupabasePersistence()
     
-    # 1. Try to find by ID first
-    metadata = await db.get_project_metadata(project_id)
-    if metadata:
-        return {"id": project_id, **metadata}
-    
-    # 2. Fallback: maybe ID passed IS the name?
-    uuid = await db.get_project_id_by_name(project_id)
-    if uuid:
-        metadata = await db.get_project_metadata(uuid)
-        if metadata:
-            return {"id": uuid, **metadata}
+    # Resolve to UUID
+    resolved_uuid = await db.resolve_project_id(project_id)
+    if not resolved_uuid:
+        return {"error": "Project not found"}
         
-    return {"error": "Project not found"}
+    metadata = await db.get_project_metadata(resolved_uuid)
+    if metadata:
+        return {"id": resolved_uuid, **metadata}
+        
+    return {"error": "Project data not found"}
+
 
 @app.post("/projects/create")
 async def create_project(
@@ -571,25 +699,32 @@ async def delete_project(project_id: str):
 @app.get("/projects/{project_id}/files")
 async def list_project_files(project_id: str):
     """Returns the file tree for the project's output directory."""
-    # 1. Resolve Project Name if ID is UUID
     db = SupabasePersistence()
+    resolved_uuid = await db.resolve_project_id(project_id)
+    if not resolved_uuid:
+        return {"files": []}
+        
     project_name = project_id
-    if "-" in project_id:
-        n = await db.get_project_name_by_id(project_id)
-        if n: project_name = n
+    resolved_name = await db.get_project_name_by_id(resolved_uuid)
+    if resolved_name:
+        project_name = resolved_name
         
     tree = PersistenceService.get_project_files(project_name)
     return tree
 
+
 @app.get("/projects/{project_id}/files/content")
 async def get_file_content(project_id: str, path: str):
     """Returns the content of a specific file."""
-    # Resolve Project Name if ID is UUID
     db = SupabasePersistence()
+    resolved_uuid = await db.resolve_project_id(project_id)
+    if not resolved_uuid:
+        return {"error": "Project not found"}
+        
     project_name = project_id
-    if "-" in project_id:
-        n = await db.get_project_name_by_id(project_id)
-        if n: project_name = n
+    resolved_name = await db.get_project_name_by_id(resolved_uuid)
+    if resolved_name:
+        project_name = resolved_name
         
     try:
         content = PersistenceService.read_file_content(project_name, path)
@@ -598,6 +733,7 @@ async def get_file_content(project_id: str, path: str):
         return {"error": str(e)}
     except Exception as e:
         return {"error": f"Failed to read file: {e}"}
+
 
 from services.migration_orchestrator import MigrationOrchestrator
 
@@ -611,14 +747,17 @@ async def trigger_orchestration(payload: Dict[str, Any]):
     if not project_id:
         return {"error": "project_id is required"}
         
-    # 1. Resolve Project Name (Orchestrator expects Name/Folder currently)
+    # 1. Resolve Project UUID
     db = SupabasePersistence()
+    resolved_uuid = await db.resolve_project_id(project_id)
+    if not resolved_uuid:
+        return {"error": "Project not found"}
+        
     project_name = project_id
-    if "-" in project_id:
-        print(f"DEBUG: Resolving project name for ID: {project_id}")
-        n = await db.get_project_name_by_id(project_id)
-        print(f"DEBUG: Resolved project name: {n}")
-        if n: project_name = n
+    resolved_name = await db.get_project_name_by_id(resolved_uuid)
+    if resolved_name:
+        project_name = resolved_name
+
 
     print(f"DEBUG: Instantiating MigrationOrchestrator for {project_name}")
     orchestrator = MigrationOrchestrator(project_name)
@@ -631,7 +770,11 @@ async def trigger_orchestration(payload: Dict[str, Any]):
 async def reset_project(project_id: str):
     """Clears triage results for a project, resetting it to stage 1."""
     db = SupabasePersistence()
-    success = await db.reset_project_data(project_id)
+    resolved_uuid = await db.resolve_project_id(project_id)
+    if not resolved_uuid:
+        return {"success": False, "error": "Project not found"}
+    success = await db.reset_project_data(resolved_uuid)
+
     return {"success": success}
 
 @app.post("/projects/{project_id}/approve")
@@ -639,11 +782,10 @@ async def approve_triage(project_id: str):
     """Locks the project scope and transitions to DRAFTING state."""
     db = SupabasePersistence()
     
-    # Heuristic: verify UUID vs Name
-    project_uuid = project_id
-    if "-" not in project_id:
-        u = await db.get_project_id_by_name(project_id)
-        if u: project_uuid = u
+    project_uuid = await db.resolve_project_id(project_id)
+    if not project_uuid:
+        return {"success": False, "error": "Project not found"}
+
 
     # Check validation rules? (e.g. must have assets selected)
     # For now, just transition.
@@ -656,32 +798,23 @@ async def unlock_triage(project_id: str):
     """Unlocks the project scope and transitions back to TRIAGE state."""
     db = SupabasePersistence()
     
-    project_uuid = project_id
-    if "-" not in project_id:
-        u = await db.get_project_id_by_name(project_id)
-        if u: project_uuid = u
+    project_uuid = await db.resolve_project_id(project_id)
+    if not project_uuid:
+        return {"success": False, "error": "Project not found"}
+
 
     success = await db.update_project_status(project_uuid, "TRIAGE")
     return {"success": success, "status": "TRIAGE"}
 
-@app.get("/projects/{project_id}/logs")
-async def get_project_logs(project_id: str):
-    """Returns the content of the migration log file."""
-    # Resolve Project Name
+@app.post("/projects/{project_id}/config")
+async def update_project_config(project_id: str, config: Dict[str, Any]):
+    """Updates the project configuration (source/destination tech)."""
     db = SupabasePersistence()
-    project_name = project_id
-    if "-" in project_id:
-        n = await db.get_project_name_by_id(project_id)
-        if n: project_name = n
-    
-    try:
-        # Use PersistenceService to resolve path securely
-        content = PersistenceService.read_file_content(project_name, "migration.log")
-        return {"logs": content}
-    except ValueError:
-        return {"logs": ""} # File likely doesn't exist yet
-    except Exception as e:
-        return {"logs": f"Error reading logs: {e}"}
+    success = await db.update_project_config(project_id, config)
+    return {"success": success}
+
+# Duplicate get_project_logs removed.
+
 
 # --- Phase 3: Refinement Endpoints ---
 from services.refinement.refinement_orchestrator import RefinementOrchestrator
@@ -746,12 +879,13 @@ async def get_project_status(project_id: str):
     """Returns the current governance status."""
     db = SupabasePersistence()
     
-    project_uuid = project_id
-    if "-" not in project_id:
-        u = await db.get_project_id_by_name(project_id)
-        if u: project_uuid = u
+    # Resolve to UUID
+    resolved_uuid = await db.resolve_project_id(project_id)
+    if not resolved_uuid:
+        return {"error": "Project not found"}
         
-    status = await db.get_project_status(project_uuid)
+    res = db.client.table("projects").select("*").eq("id", resolved_uuid).execute()
+    status = res.data[0].get("status") if res.data else None
     return {"status": status}
 
 
@@ -804,8 +938,11 @@ def is_valid_uuid(val):
 @app.get("/projects/{project_id}/triage/report")
 async def download_triage_report(project_id: str):
     """Generates and downloads a PDF report for the Triage stage."""
-    project_uuid = project_id if is_valid_uuid(project_id) else "34dcb9bd-03bc-4cad-906c-e5f348f50cb9"
     db = SupabasePersistence()
+    project_uuid = await db.resolve_project_id(project_id)
+    if not project_uuid:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+
 
     # Get Metadata
     meta = await db.get_project_metadata(project_uuid)
@@ -813,12 +950,19 @@ async def download_triage_report(project_id: str):
     # Get Assets
     assets = await db.get_project_assets(project_uuid)
     
+    # Get Layout (Dependencies)
+    layout = await db.get_project_layout(project_uuid)
+    
     report_data = {
         "name": meta.get("name", "Unknown") if meta else project_id,
-        "generated_at": datetime.datetime.now().isoformat(),
+        "generated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "assets": assets,
-        "summary": {} # Add summary metrics if available
+        "layout": layout,
+        "config": meta.get("config", {}) if meta else {},
+        "summary": {} 
     }
+
+
     
     pdf_bytes = ReportService.generate_triage_pdf(report_data)
     project_name = meta.get("name", project_id) if meta else project_id
@@ -838,6 +982,63 @@ async def download_triage_report(project_id: str):
     return StreamingResponse(
         io.BytesIO(pdf_bytes), 
         media_type="application/pdf", 
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}; filename=\"{filename}\""}
+    )
+
+
+@app.get("/projects/{project_id}/governance/report")
+async def download_governance_report(project_id: str):
+    """Generates and downloads the Final Governance PDF Report."""
+    db = SupabasePersistence()
+    project_uuid = await db.resolve_project_id(project_id)
+    if not project_uuid:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+    
+    # 1. Get Project Metadata
+    meta = await db.get_project_metadata(project_uuid)
+    project_name = meta.get("name", project_id) if meta else project_id
+
+    # 2. Get Governance Data (Score, Lineage, Stats)
+    gov_service = GovernanceService()
+    try:
+        # Reuse standard project name resolution
+        gov_data = gov_service.get_certification_report(project_name)
+    except Exception as e:
+        gov_data = {"error": str(e)}
+
+    # 3. Get Manual Content (from file)
+    manual_content = "Operating Manual not generated."
+    try:
+        content = PersistenceService.read_file_content(project_name, "GOVERNANCE/manual.md")
+        if content: manual_content = content
+    except:
+        pass
+    
+    # 4. Prepare Data Packet
+    report_data = {
+        "name": project_name,
+        "governance": gov_data,
+        "manual_content": manual_content
+    }
+
+    # 5. Generate PDF
+    pdf_bytes = ReportService.generate_final_report_pdf(report_data)
+    
+    safe_name = "".join([c for c in project_name if c.isalnum() or c in (' ', '-', '_')]).strip()
+    filename = f"Certificate_{safe_name}.pdf"
+    
+    # Persist copy
+    try:
+        PersistenceService.save_report_pdf(project_name, filename, pdf_bytes)
+    except:
+        pass
+
+    import urllib.parse
+    encoded_filename = urllib.parse.quote(filename)
+    
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}; filename=\"{filename}\""}
     )
 

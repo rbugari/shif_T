@@ -31,11 +31,20 @@ class DeveloperService:
         with open(self.prompt_path, "r", encoding="utf-8") as f:
             return f.read()
 
+    def compile_prompt(self, platform_spec: Dict[str, Any], knowledge_context: str = "") -> str:
+        """Returns the system prompt merged with standards and knowledge context."""
+        prompt = self._load_prompt()
+        prompt += f"\n\n## PLATFORM RULES (Target Technology)\n{json.dumps(platform_spec, indent=2)}"
+        if knowledge_context:
+            prompt += f"\n\n## DRIVER KNOWLEDGE CONTEXT (Source Technology)\n{knowledge_context}"
+        return prompt
+
     @logger.llm_debug("Developer-Transpiler")
     async def generate_code(self, 
                             task_def: Dict[str, Any], 
                             platform_spec: Dict[str, Any], 
-                            schema_ref: Dict[str, Any]) -> Dict[str, Any]:
+                            schema_ref: Dict[str, Any],
+                            knowledge_context: str = "") -> Dict[str, Any]:
         """
         Generates code for a specific task/package.
         """
@@ -50,6 +59,10 @@ class DeveloperService:
         user_message = f"""
         PLATFORM RULES (Use these patterns):
         {json.dumps(platform_spec, indent=2)}
+        
+        DRIVER KNOWLEDGE (Source Technology Context):
+        {knowledge_context or "No specific driver context provided."}
+
         
         TARGET SCHEMA (Use these types):
         {json.dumps(schema_ref, indent=2)}

@@ -22,36 +22,31 @@ from pyspark.sql.types import *
 from pyspark.sql.window import Window
 
 # 2. Reading Bronze / Source
-# Securely fetch JDBC credentials
-jdbc_hostname = dbutils.secrets.get('scope_hr', 'hr_db_hostname')
-jdbc_port = dbutils.secrets.get('scope_hr', 'hr_db_port')
-jdbc_database = dbutils.secrets.get('scope_hr', 'hr_db_name')
-jdbc_username = dbutils.secrets.get('scope_hr', 'hr_db_user')
-jdbc_password = dbutils.secrets.get('scope_hr', 'hr_db_password')
-jdbc_url = f"jdbc:sqlserver://{jdbc_hostname}:{jdbc_port};databaseName={jdbc_database}"
+# JDBC connection details (use Databricks secrets)
+db_url = dbutils.secrets.get(scope="HR_DB", key="jdbc_url")
+db_user = dbutils.secrets.get(scope="HR_DB", key="username")
+db_password = dbutils.secrets.get(scope="HR_DB", key="password")
 
-# Parameter for empid threshold (replace with widget or parameter as needed)
-empid_threshold = dbutils.widgets.get('empid_threshold') if 'empid_threshold' in dbutils.widgets.get('') else '0'
+# Parameter for empid filter (replace with widget or parameter as needed)
+empid_param = dbutils.widgets.get("empid_param")
 
 source_query = f"""
-SELECT empid, (firstname + ' ' + lastname) AS fullname, title, city, country, address, phone
+SELECT empid, (firstname + ' ' + lastname) as fullname, title, city, country, address, phone
 FROM HR.Employees
-WHERE empid > {empid_threshold}
+WHERE empid > {empid_param}
 """
 
-# Read source data
-source_df = (
-    spark.read.format("jdbc")
-    .option("url", jdbc_url)
-    .option("dbtable", f"({source_query}) as src")
-    .option("user", jdbc_username)
-    .option("password", jdbc_password)
-    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
-    .load()
-)
+# Read source data via JDBC
+source_options = {
+    "url": db_url,
+    "user": db_user,
+    "password": db_password,
+    "dbtable": f"({source_query}) as src"
+}
+df_source = spark.read.format("jdbc").options(**source_options).load()
 
 # 3. Transformations (Apply Logic)
-# No lookups required for this task
+# No lookups specified. Direct mapping.
 
 # 3.1 Surrogate Key Generation (STABLE & IDEMPOTENT)
 # SAFE MIGRATION PATTERN: Lookup existing keys, generate new ones only for new members.
@@ -69,9 +64,9 @@ except Exception:
 
 # 2. Join Source with Target to find existing SKs
 if df_target is not None:
-    df_joined = source_df.join(df_target, on=bk_cols, how="left")
+    df_joined = df_source.join(df_target, on=bk_cols, how="left")
 else:
-    df_joined = source_df.withColumn(sk_col, lit(None).cast("integer"))
+    df_joined = df_source.withColumn(sk_col, lit(None).cast("integer"))
 
 # 3. Generate Keys for New Rows ONLY
 window_spec = Window.orderBy(*bk_cols)
@@ -80,10 +75,15 @@ df_new = df_joined.filter(col(sk_col).isNull()).drop(sk_col)
 df_new = df_new.withColumn(sk_col, row_number().over(window_spec) + max_sk)
 
 # 4. Union
-employee_df = df_existing.unionByName(df_new)
+from pyspark.sql import DataFrame
+if df_existing.count() > 0:
+    df_with_sk = df_existing.unionByName(df_new)
+else:
+    df_with_sk = df_new
 
 # 3.2 Unknown Member Handling (For Dimensions)
 def ensure_unknown_member(df):
+    # Define the schema for the unknown member
     unknown_row = {
         "EmployeeKey": -1,
         "empid": -1,
@@ -94,42 +94,39 @@ def ensure_unknown_member(df):
         "address": "Unknown",
         "phone": "Unknown"
     }
-    from pyspark.sql import Row
-    unknown_df = spark.createDataFrame([Row(**unknown_row)])
+    # Check if unknown member exists
     if df.filter(col("EmployeeKey") == -1).count() == 0:
-        return df.unionByName(unknown_df)
-    else:
-        return df
+        unknown_df = spark.createDataFrame([unknown_row])
+        df = df.unionByName(unknown_df)
+    return df
 
-employee_df = ensure_unknown_member(employee_df)
+df_final = ensure_unknown_member(df_with_sk)
 
 # 4. Mandatory Type Casting (STRICT)
-# Define target schema types explicitly
-employee_df = (
-    employee_df
-    .withColumn("EmployeeKey", col("EmployeeKey").cast("integer"))
-    .withColumn("empid", col("empid").cast("integer"))
-    .withColumn("fullname", col("fullname").cast("string"))
-    .withColumn("title", col("title").cast("string"))
-    .withColumn("city", col("city").cast("string"))
-    .withColumn("country", col("country").cast("string"))
-    .withColumn("address", col("address").cast("string"))
+# Target schema is not provided, so we infer types based on platform rules and typical dimension design
+# EmployeeKey: INTEGER
+# empid: INTEGER
+# fullname: STRING
+# title: STRING
+# city: STRING
+# country: STRING
+# address: STRING
+# phone: STRING
+
+df_final = df_final.withColumn("EmployeeKey", col("EmployeeKey").cast("integer"))\
+    .withColumn("empid", col("empid").cast("integer"))\
+    .withColumn("fullname", col("fullname").cast("string"))\
+    .withColumn("title", col("title").cast("string"))\
+    .withColumn("city", col("city").cast("string"))\
+    .withColumn("country", col("country").cast("string"))\
+    .withColumn("address", col("address").cast("string"))\
     .withColumn("phone", col("phone").cast("string"))
-)
 
 # 5. Writing to Silver/Gold (Apply Platform Pattern)
-# Overwrite the DimEmployee table (idempotent)
-(
-    employee_df
-# [DISABLED_BY_ARCHITECT]     .write
-    .format("delta")
-    .mode("overwrite")
-    .option("overwriteSchema", "true")
-# [DISABLED_BY_ARCHITECT]     .saveAsTable(target_table_name)
-)
+# Overwrite the DimEmployee table (idempotent write)
+# [DISABLED_BY_ARCHITECT] df_final.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table_name)
 
-# 6. Optimization (Z-ORDER)
-# Z-ORDER on empid for query performance
+# Optimization: Z-ORDER on empid (high-cardinality business key)
 # [DISABLED_BY_ARCHITECT] spark.sql(f"OPTIMIZE {target_table_name} ZORDER BY (empid)")
 
 

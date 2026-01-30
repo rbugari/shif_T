@@ -1,5 +1,5 @@
 {
-  "project_id": "base",
+  "project_id": "Base",
   "dag_execution": [
     {
       "phase": "Bronze_Ingestion",

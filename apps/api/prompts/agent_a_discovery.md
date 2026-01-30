@@ -43,11 +43,10 @@ Tu salida debe ser exclusivamente un objeto JSON con la siguiente estructura:
 
 ```json
 {
-  "solution_summary": {
-    "detected_paradigm": "ETL | ELT | Hybrid",
-    "primary_technology": "string",
-    "total_nodes": "number"
-  },
+  "solution_summary": "High-level summary of the overall architecture and data flow.",
+  "detected_paradigm": "ETL | ELT | Hybrid",
+  "primary_technology": "string",
+  "total_nodes": "number",
   "mesh_graph": {
     "nodes": [
       {
@@ -55,8 +54,15 @@ Tu salida debe ser exclusivamente un objeto JSON con la siguiente estructura:
         "label": "string",
         "category": "CORE | SUPPORT | IGNORED",
         "complexity": "LOW | MEDIUM | HIGH",
-        "confidence": "0.0 - 1.0"
+        "confidence": "0.0 - 1.0",
+        "technical_summary": {
+            "purpose": "Brief description of the asset's function",
+            "inputs": ["source_tables", "source_files", "parameters"],
+            "outputs": ["dest_tables", "dest_files"],
+            "main_steps": ["Step 1: Description", "Step 2: Description"]
+        }
       }
+
     ],
     "edges": [
       {
@@ -72,12 +78,18 @@ Tu salida debe ser exclusivamente un objeto JSON con la siguiente estructura:
   ],
   "critical_questions": [
     "string (Preguntas para el usuario sobre ambigüedades en la malla)"
+  ],
+  "gaps": [
+    "string (ej. 'Procedimiento SP_CalculoVentas referenciado en FactSales.dtsx pero no encontrado en el repositorio')"
   ]
 }
+
 ```
 
 ## Guiding Principles
 
-1.  **No asumas perfección**: Si un vínculo es dudoso, baja el confidence y agrégalo a `critical_questions`.
-2.  **Mover la T**: Siempre busca oportunidades donde procesos secuenciales del viejo mundo puedan ser paralelizados en el nuevo mundo.
-3.  **Agnosticismo**: Aunque veas XML de SSIS, piensa en "Nodos de Control" y "Nodos de Datos".
+1.  **File-Level Granularity**: Los Nodos del grafo DEBEN corresponder a archivos físicos listados en el `file_tree`. NO crees nodos para tareas internas (ej. "Execute SQL Task") a menos que representen una dependencia externa crítica no encontrada en el repo (Gap).
+2.  **ID Mapping**: El campo `id` del nodo DEBE ser idéntico al `path` del archivo en el inventario.
+3.  **No asumas perfección**: Si un vínculo es dudoso, baja el confidence y agrégalo a `critical_questions`.
+4.  **Mover la T**: Siempre busca oportunidades donde procesos secuenciales del viejo mundo puedan ser paralelizados en el nuevo mundo.
+5.  **Agnosticismo**: Aunque veas XML de SSIS, piensa en "Nodos de Control" y "Nodos de Datos".

@@ -19,6 +19,12 @@ class AgentGService:
         with open(target_path, "r", encoding="utf-8") as f:
             return f.read()
 
+    def compile_prompt(self, project_name: str = "Demo") -> str:
+        """Returns the system prompt with context."""
+        prompt = self._load_prompt()
+        prompt += f"\n\n## CONTEXT: Project {project_name}"
+        return prompt
+
     async def generate_documentation(self, project_name: str, mesh: Dict[str, Any], transformations: List[Dict[str, Any]]) -> str:
         """Generates technical documentation and lineage for a project."""
         system_prompt = self._load_prompt(self.prompt_path)

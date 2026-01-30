@@ -31,10 +31,23 @@ class AgentAService:
         with open(target_path, "r", encoding="utf-8") as f:
             return f.read()
 
+    def compile_prompt(self, knowledge_context: str = "") -> str:
+        """Returns the system prompt merged with the global knowledge context."""
+        prompt = self._load_prompt()
+        if knowledge_context:
+            prompt += f"\n\n## DRIVER KNOWLEDGE CONTEXT\n{knowledge_context}"
+        return prompt
+
     async def analyze_manifest(self, manifest: Dict[str, Any], system_prompt_override: str = None) -> Dict[str, Any]:
         """Analyzes the full project manifest to build the Mesh Graph."""
         
         system_prompt = system_prompt_override or self._load_prompt()
+        
+        # INJECT DRIVER KNOWLEDGE IF AVAILABLE
+        knowledge_context = manifest.get("knowledge_context", "")
+        if knowledge_context:
+            logger.info(f"Injecting Knowledge Context into Agent A Prompt...", "Agent A")
+            system_prompt += f"\n\n## DRIVER KNOWLEDGE CONTEXT\n{knowledge_context}"
         
         # Prepare content for LLM (might need truncation if too large)
         # We send the structure and snippets.
@@ -53,6 +66,8 @@ class AgentAService:
         2. Assign a FUNCTIONAL CATEGORY (CORE, SUPPORT, IGNORED) to all relevant files.
         3. Discover dependencies (Edges) based on 'invocations', 'metadata.executables', or naming conventions. Focus the mesh on CORE components.
         4. Synthesize the Mesh Graph. Return ONLY the JSON requested in the System Prompt.
+
+        IMPORTANT: Your response MUST be a valid JSON object matching exactly the structure defined in the System Prompt (keys: solution_summary, mesh_graph, triage_observations, critical_questions). Do NOT return the input manifest.
         """
         
         logger.info(f"Agent A analyzing manifest for {manifest.get('project_id')}...", "Agent A")

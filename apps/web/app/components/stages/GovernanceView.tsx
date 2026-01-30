@@ -13,9 +13,15 @@ import {
     TrendingUp,
     ScrollText,
     ExternalLink,
-    Code
+    Code,
+    Maximize2,
+    Minimize2,
+    Layout
 } from 'lucide-react';
 import { API_BASE_URL } from '../../lib/config';
+import SolutionExplorer from '../SolutionExplorer';
+import { Editor } from '@monaco-editor/react';
+import MarkdownPreview from '../MarkdownPreview';
 
 interface GovernanceViewProps {
     projectId: string;
@@ -24,6 +30,13 @@ interface GovernanceViewProps {
 export default function GovernanceView({ projectId }: GovernanceViewProps) {
     const [report, setReport] = useState<any>(null);
     const [loading, setLoading] = useState(true);
+
+    // UI State
+    const [activeTab, setActiveTab] = useState<"summary" | "files">("summary");
+    const [selectedFileContent, setSelectedFileContent] = useState<string>("");
+    const [selectedFileName, setSelectedFileName] = useState<string>("");
+    const [viewMode, setViewMode] = useState<"code" | "preview">("code");
+    const [isFullScreen, setIsFullScreen] = useState(false);
 
     useEffect(() => {
         fetch(`${API_BASE_URL}/projects/${projectId}/governance`)
@@ -37,6 +50,18 @@ export default function GovernanceView({ projectId }: GovernanceViewProps) {
                 setLoading(false);
             });
     }, [projectId]);
+
+    const handleFileSelect = (content: string, name: string, path: string) => {
+        setSelectedFileContent(content);
+        setSelectedFileName(name);
+
+        // Auto-switch based on extension
+        if (name.endsWith(".md")) {
+            setViewMode("preview");
+        } else {
+            setViewMode("code");
+        }
+    };
 
     if (loading) {
         return (
@@ -59,78 +84,149 @@ export default function GovernanceView({ projectId }: GovernanceViewProps) {
     };
 
     return (
-        <div className="h-full bg-gray-50/50 dark:bg-gray-950 overflow-y-auto p-8 custom-scrollbar">
-            <div className="max-w-5xl mx-auto space-y-8">
+        <div className={`h-full bg-gray-50/50 dark:bg-gray-950 overflow-hidden flex flex-col relative`}>
 
-                {/* Hero Success Section */}
-                <div className="relative overflow-hidden bg-gradient-to-br from-indigo-600 via-blue-600 to-indigo-700 rounded-3xl p-10 text-white shadow-2xl">
-                    <div className="relative z-10 flex flex-col md:flex-row justify-between items-center gap-8">
-                        <div className="space-y-4">
-                            <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-[10px] font-bold uppercase tracking-widest">
-                                <ShieldCheck size={12} /> Compliance Passed
-                            </div>
-                            <h1 className="text-4xl font-extrabold tracking-tight">Migration Certified.</h1>
-                            <p className="text-blue-100 max-w-md text-lg leading-relaxed">
-                                Your legacy SSIS logic has been successfully architecturalized into modern, idempotent Delta Lake logic.
-                            </p>
-                            <div className="flex items-center gap-4 pt-4">
-                                <a
-                                    href={`${API_BASE_URL}/projects/${projectId}/export`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="px-6 py-3 bg-white text-blue-700 rounded-xl font-bold shadow-lg hover:bg-blue-50 transition-all flex items-center gap-2"
-                                >
-                                    <Download size={18} /> Download Final Bundle
-                                </a>
-                                <button className="px-6 py-3 bg-blue-500/30 border border-white/20 backdrop-blur-md rounded-xl font-bold hover:bg-white/10 transition-all flex items-center gap-2">
-                                    <Github size={18} /> Push to Repository
-                                </button>
-                            </div>
+            {/* --- FULLSCREEN OVERLAY MODE (Only for Files) --- */}
+            {isFullScreen && (
+                <div className="flex flex-col h-screen fixed inset-0 z-50 bg-gray-950">
+                    <div className="h-14 bg-gray-900 border-b border-gray-800 flex items-center justify-between px-4 shrink-0">
+                        <div className="flex items-center gap-2">
+                            <FileText size={16} className="text-blue-500" />
+                            <span className="font-bold text-gray-200">{selectedFileName || "Solution Explorer"}</span>
                         </div>
-
-                        {/* Large Score Circle */}
-                        <div className="relative w-48 h-48 flex items-center justify-center">
-                            <svg className="w-full h-full transform -rotate-90">
-                                <circle
-                                    cx="96"
-                                    cy="96"
-                                    r="88"
-                                    stroke="currentColor"
-                                    strokeWidth="12"
-                                    fill="transparent"
-                                    className="text-white/10"
-                                />
-                                <circle
-                                    cx="96"
-                                    cy="96"
-                                    r="88"
-                                    stroke="currentColor"
-                                    strokeWidth="12"
-                                    fill="transparent"
-                                    strokeDasharray={552}
-                                    strokeDashoffset={552 - (552 * auditScore) / 100}
-                                    className="text-white transition-all duration-1000 ease-out"
-                                />
-                            </svg>
-                            <div className="absolute inset-0 flex flex-col items-center justify-center">
-                                <span className="text-5xl font-black">{auditScore}</span>
-                                <span className="text-[10px] font-bold uppercase opacity-60">Architect Score</span>
-                            </div>
+                        <div className="flex items-center gap-2">
+                            {selectedFileName.endsWith(".md") && (
+                                <div className="flex bg-gray-800 rounded-lg p-0.5 mr-4">
+                                    <button
+                                        onClick={() => setViewMode("preview")}
+                                        className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${viewMode === "preview" ? "bg-blue-600 text-white shadow-sm" : "text-gray-400 hover:text-white"}`}
+                                    >
+                                        Preview
+                                    </button>
+                                    <button
+                                        onClick={() => setViewMode("code")}
+                                        className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${viewMode === "code" ? "bg-blue-600 text-white shadow-sm" : "text-gray-400 hover:text-white"}`}
+                                    >
+                                        Code
+                                    </button>
+                                </div>
+                            )}
+                            <button
+                                onClick={() => setIsFullScreen(false)}
+                                className="p-2 hover:bg-gray-800 text-gray-400 hover:text-white rounded-lg transition-colors"
+                            >
+                                <Minimize2 size={18} />
+                            </button>
                         </div>
                     </div>
+                    <div className="flex-1 flex overflow-hidden">
+                        <div className="w-64 border-r border-gray-800 bg-gray-900/50 hidden md:flex flex-col">
+                            <SolutionExplorer
+                                projectId={projectId}
+                                filterDir="Refined"
+                                onFileSelect={handleFileSelect}
+                            />
+                        </div>
+                        <div className="flex-1 bg-[#1e1e1e]">
+                            {selectedFileName ? (
+                                viewMode === "preview" ? (
+                                    <div className="h-full overflow-y-auto p-8 bg-white dark:bg-gray-900">
+                                        <MarkdownPreview content={selectedFileContent} />
+                                    </div>
+                                ) : (
+                                    <Editor
+                                        height="100%"
+                                        language={selectedFileName.endsWith('.py') ? 'python' : selectedFileName.endsWith('.sql') ? 'sql' : 'markdown'}
+                                        theme="vs-dark"
+                                        value={selectedFileContent}
+                                        options={{
+                                            readOnly: true,
+                                            minimap: { enabled: true },
+                                            fontSize: 14,
+                                            scrollBeyondLastLine: false,
+                                        }}
+                                    />
+                                )
+                            ) : (
+                                <div className="h-full flex flex-col items-center justify-center text-gray-500">
+                                    <FileText size={48} className="opacity-20 mb-4" />
+                                    <p>Select a file to review logic</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
 
-                    {/* Background Decorative Elements */}
-                    <div className="absolute top-0 right-0 -mr-20 -mt-20 w-80 h-80 bg-white/10 rounded-full blur-3xl opacity-50" />
-                    <div className="absolute bottom-0 left-0 -ml-20 -mb-20 w-64 h-64 bg-black/10 rounded-full blur-3xl opacity-50" />
+
+            {/* --- TOP HEADER (Compact) --- */}
+            <div className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 p-4 shrink-0 flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center text-white shadow-lg">
+                        <span className="font-black text-lg">{auditScore}</span>
+                    </div>
+                    <div>
+                        <h1 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                            Governance Output <ShieldCheck size={18} className="text-green-500" />
+                        </h1>
+                        <p className="text-xs text-gray-500">Migration Certified & Ready for Deployment</p>
+                    </div>
                 </div>
 
-                {/* Grid Layout for details */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div className="flex items-center gap-3">
+                    <a
+                        href={`${API_BASE_URL}/projects/${projectId}/export`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-4 py-2 text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors font-semibold flex items-center gap-2"
+                    >
+                        <Download size={16} /> Assets
+                    </a>
+                    <button
+                        className="px-4 py-2 text-sm bg-gray-800 text-white rounded-lg hover:bg-gray-700 transition-colors font-semibold shadow-sm flex items-center gap-2"
+                        title="Push to Git (Coming Soon)"
+                    >
+                        <Github size={16} /> Push to Git
+                    </button>
+                    <a
+                        href={`${API_BASE_URL}/projects/${projectId}/governance/report`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold shadow-sm flex items-center gap-2"
+                    >
+                        <FileText size={16} /> PDF Report
+                    </a>
+                </div>
+            </div>
 
-                    {/* Column 1 & 2: Main Details */}
-                    <div className="lg:col-span-2 space-y-8">
+            {/* --- TABS --- */}
+            <div className="flex items-center gap-6 px-6 border-b border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-950/50 shrink-0">
+                <button
+                    onClick={() => setActiveTab("summary")}
+                    className={`py-3 text-sm font-bold border-b-2 transition-all ${activeTab === "summary"
+                        ? "border-blue-500 text-blue-600 dark:text-blue-400"
+                        : "border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                        }`}
+                >
+                    Executive Summary
+                </button>
+                <button
+                    onClick={() => setActiveTab("files")}
+                    className={`py-3 text-sm font-bold border-b-2 transition-all flex items-center gap-2 ${activeTab === "files"
+                        ? "border-blue-500 text-blue-600 dark:text-blue-400"
+                        : "border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                        }`}
+                >
+                    Solution Explorer <Code size={14} />
+                </button>
+            </div>
 
-                        {/* Summary Metrics */}
+            {/* --- CONTENT AREA --- */}
+            <div className="flex-1 overflow-hidden p-6 relative">
+
+                {activeTab === "summary" && (
+                    <div className="h-full overflow-y-auto custom-scrollbar max-w-5xl mx-auto space-y-8 pb-20">
+                        {/* Metrics Grid */}
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                             <StatCard label="Total Refined" value={stats.total_files} icon={<ScrollText className="text-blue-500" />} />
                             <StatCard label="Pyspark Lines" value={stats.total_lines} icon={<Code className="text-purple-500" />} />
@@ -138,84 +234,125 @@ export default function GovernanceView({ projectId }: GovernanceViewProps) {
                             <StatCard label="Idempotency" value="100%" icon={<ShieldCheck className="text-indigo-500" />} />
                         </div>
 
-                        {/* Recent Governance Logs */}
-                        <div className="bg-white dark:bg-gray-900 rounded-3xl p-6 border border-gray-200 dark:border-gray-800 shadow-sm">
-                            <h3 className="text-lg font-bold mb-6 flex items-center gap-2">
-                                <CheckCircle className="text-green-500" /> Compliance Audit Trail
-                            </h3>
-                            <div className="space-y-4">
-                                {report?.compliance_logs?.length > 0 ? (
-                                    report.compliance_logs.map((log: any, idx: number) => (
-                                        <LogItem
-                                            key={idx}
-                                            status={log.status}
-                                            message={log.message}
-                                            time={log.time}
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                            {/* Lineage */}
+                            <div className="lg:col-span-2 bg-white dark:bg-gray-900 rounded-2xl p-6 border border-gray-200 dark:border-gray-800 shadow-sm">
+                                <h3 className="text-lg font-bold mb-6 flex items-center gap-2">
+                                    <TrendingUp size={20} className="text-indigo-500" /> Architecture Lineage
+                                </h3>
+                                <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                                    {report?.lineage?.map((item: any, idx: number) => (
+                                        <LineageRow key={idx} item={item} />
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Logs */}
+                            <div className="bg-white dark:bg-gray-900 rounded-2xl p-6 border border-gray-200 dark:border-gray-800 shadow-sm">
+                                <h3 className="text-lg font-bold mb-6 flex items-center gap-2">
+                                    <CheckCircle size={20} className="text-green-500" /> Audit Trail
+                                </h3>
+                                <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                                    {report?.compliance_logs?.length > 0 ? (
+                                        report.compliance_logs.map((log: any, idx: number) => (
+                                            <LogItem
+                                                key={idx}
+                                                status={log.status}
+                                                message={log.message}
+                                                time={log.time}
+                                            />
+                                        ))
+                                    ) : (
+                                        <div className="text-center py-4 text-gray-400 text-sm italic">
+                                            No certification logs found.
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {activeTab === "files" && (
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full">
+                        {/* Sidebar Tree */}
+                        <div className="lg:col-span-3 h-full overflow-hidden bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm flex flex-col">
+                            <div className="p-3 border-b border-gray-100 dark:border-gray-800 font-bold text-xs uppercase text-gray-500">
+                                Project Artifacts
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-2">
+                                <SolutionExplorer
+                                    projectId={projectId}
+                                    filterDir="Refined"
+                                    onFileSelect={handleFileSelect}
+                                />
+                            </div>
+                        </div>
+
+                        {/* Content Viewer */}
+                        <div className="lg:col-span-9 h-full bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden flex flex-col">
+                            <div className="p-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 flex justify-between items-center shrink-0">
+                                <h3 className="text-xs font-bold uppercase text-gray-500 flex items-center gap-2 pl-2">
+                                    <Code size={14} className="text-indigo-500" />
+                                    {selectedFileName || "Editor"}
+                                </h3>
+                                <div className="flex items-center gap-2">
+                                    {selectedFileName.endsWith(".md") && (
+                                        <div className="flex bg-gray-200 dark:bg-gray-800 rounded-lg p-0.5 mr-2">
+                                            <button
+                                                onClick={() => setViewMode("preview")}
+                                                className={`px-2 py-0.5 text-[10px] font-bold rounded transition-all ${viewMode === "preview" ? "bg-white dark:bg-gray-700 shadow-sm" : "text-gray-400"}`}
+                                            >
+                                                Preview
+                                            </button>
+                                            <button
+                                                onClick={() => setViewMode("code")}
+                                                className={`px-2 py-0.5 text-[10px] font-bold rounded transition-all ${viewMode === "code" ? "bg-white dark:bg-gray-700 shadow-sm" : "text-gray-400"}`}
+                                            >
+                                                Code
+                                            </button>
+                                        </div>
+                                    )}
+                                    <button
+                                        onClick={() => setIsFullScreen(true)}
+                                        className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded text-gray-400 transition-colors"
+                                        title="Full Screen"
+                                    >
+                                        <Maximize2 size={14} />
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="flex-1 bg-[#1e1e1e] overflow-hidden relative">
+                                {selectedFileName ? (
+                                    viewMode === "preview" ? (
+                                        <div className="h-full overflow-y-auto p-6 bg-white dark:bg-gray-900">
+                                            <MarkdownPreview content={selectedFileContent} />
+                                        </div>
+                                    ) : (
+                                        <Editor
+                                            height="100%"
+                                            language={selectedFileName.endsWith('.py') ? 'python' : selectedFileName.endsWith('.sql') ? 'sql' : 'markdown'}
+                                            theme="vs-dark"
+                                            value={selectedFileContent}
+                                            options={{
+                                                readOnly: true,
+                                                minimap: { enabled: false },
+                                                fontSize: 13,
+                                                padding: { top: 16 },
+                                                scrollBeyondLastLine: false,
+                                            }}
                                         />
-                                    ))
+                                    )
                                 ) : (
-                                    <div className="text-center py-4 text-gray-400 text-sm italic">
-                                        No certification logs found.
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500 z-0">
+                                        <FileText size={48} className="opacity-20 mb-4" />
+                                        <p className="text-sm">Select a file to review</p>
                                     </div>
                                 )}
                             </div>
                         </div>
                     </div>
-
-                    {/* Column 3: Sidebar Details */}
-                    <div className="space-y-8">
-                        {/* Output Artifacts */}
-                        <div className="bg-white dark:bg-gray-900 rounded-3xl p-6 border border-gray-200 dark:border-gray-800 shadow-sm h-full">
-                            <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                                <FileText size={20} className="text-gray-400" /> Deliverables
-                            </h3>
-                            <div className="space-y-3">
-                                <ArtifactLink label="Bronze Layer Scripts" size={`${stats.bronze_count} files`} />
-                                <ArtifactLink label="Silver Layer Scripts" size={`${stats.silver_count} files`} />
-                                <ArtifactLink label="Gold Layer Scripts" size={`${stats.gold_count} files`} />
-                                <ArtifactLink label="IaC & DevOp Manifests" size="2 files" />
-                            </div>
-
-                            <hr className="my-6 border-gray-100 dark:border-gray-800" />
-
-                            <div className="p-4 bg-blue-50 dark:bg-blue-900/10 rounded-2xl">
-                                <div className="flex items-center gap-3 mb-2">
-                                    <Database className="text-blue-500" size={18} />
-                                    <span className="text-sm font-bold text-blue-900 dark:text-blue-200">Catalog Target</span>
-                                </div>
-                                <p className="text-[11px] text-blue-700 dark:text-blue-400 font-mono">
-                                    shiftt_silver_db.orders_migrated
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Visual Lineage Section */}
-                <div className="bg-white dark:bg-gray-900 rounded-3xl p-8 border border-gray-200 dark:border-gray-800 shadow-sm">
-                    <h3 className="text-xl font-bold mb-8 flex items-center gap-2">
-                        <TrendingUp size={20} className="text-indigo-500" /> Medallion Lineage Mapping
-                    </h3>
-                    <div className="space-y-12 max-h-[600px] overflow-y-auto pr-4 custom-scrollbar">
-                        {report?.lineage?.map((item: any, idx: number) => (
-                            <LineageRow key={idx} item={item} />
-                        ))}
-                    </div>
-                </div>
-
-                {/* Final Footer CTA */}
-                <div className="flex flex-col items-center justify-center py-10 text-center space-y-4 border-t border-gray-100 dark:border-gray-800">
-                    <div className="w-16 h-1 w-16 bg-gray-200 dark:bg-gray-800 rounded-full mb-4" />
-                    <h3 className="text-xl font-bold">Ready to take the next step?</h3>
-                    <p className="text-gray-500 max-w-md text-sm">
-                        You can deploy these artifacts directly to your Databricks Workspace or export them for external CI/CD pipelines.
-                    </p>
-                    <div className="flex gap-4 pt-2">
-                        <button className="text-sm font-bold text-primary hover:underline">Support Hub</button>
-                        <span className="text-gray-300">|</span>
-                        <button className="text-sm font-bold text-primary hover:underline">Open in Databricks</button>
-                    </div>
-                </div>
+                )}
 
             </div>
         </div>
@@ -224,12 +361,14 @@ export default function GovernanceView({ projectId }: GovernanceViewProps) {
 
 function StatCard({ label, value, icon }: any) {
     return (
-        <div className="bg-white dark:bg-gray-900 p-5 rounded-3xl border border-gray-200 dark:border-gray-800 shadow-sm flex flex-col items-center text-center">
-            <div className="p-2 bg-gray-50 dark:bg-gray-800 rounded-2xl mb-3">
+        <div className="bg-white dark:bg-gray-900 p-4 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm flex items-center gap-4">
+            <div className="p-2 bg-gray-50 dark:bg-gray-800 rounded-xl">
                 {icon}
             </div>
-            <span className="text-xl font-black text-gray-900 dark:text-white leading-none mb-1">{value}</span>
-            <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">{label}</span>
+            <div>
+                <span className="block text-xl font-black text-gray-900 dark:text-white leading-none">{value}</span>
+                <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">{label}</span>
+            </div>
         </div>
     );
 }
@@ -249,32 +388,16 @@ function LogItem({ status, message, time }: any) {
     );
 }
 
-function ArtifactLink({ label, size }: any) {
-    return (
-        <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-2xl group cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-all border border-transparent hover:border-blue-200 dark:hover:border-blue-900">
-            <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full bg-white dark:bg-gray-950 flex items-center justify-center shadow-sm">
-                    <Download size={14} className="text-gray-400 group-hover:text-blue-500 transition-colors" />
-                </div>
-                <div className="flex flex-col">
-                    <span className="text-xs font-bold text-gray-700 dark:text-gray-200">{label}</span>
-                    <span className="text-[9px] text-gray-400 uppercase">{size}</span>
-                </div>
-            </div>
-            <ArrowRight size={14} className="text-gray-300 opacity-0 group-hover:opacity-100 -translate-x-2 group-hover:translate-x-0 transition-all" />
-        </div>
-    );
-}
 function LineageRow({ item }: any) {
     return (
-        <div className="flex flex-col md:flex-row items-center justify-between gap-4 p-4 rounded-2xl bg-gray-50 dark:bg-gray-800/30 border border-gray-100 dark:border-gray-800">
-            <LineageNode label="Source File" name={item.source} icon={<FileText size={14} />} color="gray" />
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4 p-4 rounded-xl bg-gray-50 dark:bg-gray-800/30 border border-gray-100 dark:border-gray-800">
+            <LineageNode label="Source" name={item.source} icon={<FileText size={14} />} color="gray" />
             <LineageConnector />
-            <LineageNode label="Bronze Delta" name={item.targets.bronze} icon={<Database size={14} />} color="blue" />
+            <LineageNode label="Bronze" name={item.targets.bronze} icon={<Database size={14} />} color="blue" />
             <LineageConnector />
-            <LineageNode label="Silver Clean" name={item.targets.silver} icon={<ShieldCheck size={14} />} color="indigo" />
+            <LineageNode label="Silver" name={item.targets.silver} icon={<ShieldCheck size={14} />} color="indigo" />
             <LineageConnector />
-            <LineageNode label="Gold Semantic" name={item.targets.gold} icon={<TrendingUp size={14} />} color="green" />
+            <LineageNode label="Gold" name={item.targets.gold} icon={<TrendingUp size={14} />} color="green" />
         </div>
     );
 }
@@ -288,13 +411,12 @@ function LineageNode({ label, name, icon, color }: any) {
     };
 
     return (
-        <div className="flex flex-col items-center gap-2 min-w-[140px]">
-            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-tighter">{label}</span>
-            <div className={`p-3 rounded-2xl ${colors[color]} text-white shadow-lg flex items-center gap-2 w-full justify-center`}>
+        <div className="flex flex-col items-center gap-1 min-w-[100px]">
+            <span className="text-[9px] font-bold text-gray-400 uppercase">{label}</span>
+            <div className={`p-2 rounded-xl ${colors[color]} text-white shadow-sm flex items-center gap-2 w-full justify-center`}>
                 {icon}
-                <span className="text-[11px] font-bold truncate max-w-[120px]">{name.split('.').pop()}</span>
+                <span className="text-[10px] font-bold truncate max-w-[100px]">{name.split('.').pop()}</span>
             </div>
-            <span className="text-[9px] text-gray-500 font-mono truncate max-w-[140px] opacity-60">{name}</span>
         </div>
     );
 }
@@ -302,8 +424,8 @@ function LineageNode({ label, name, icon, color }: any) {
 function LineageConnector() {
     return (
         <div className="hidden md:flex flex-1 items-center justify-center">
-            <div className="h-[2px] w-full bg-gradient-to-r from-transparent via-gray-300 dark:via-gray-700 to-transparent relative">
-                <ArrowRight size={12} className="absolute right-0 -top-[5px] text-gray-300 dark:text-gray-700" />
+            <div className="h-[1px] w-full bg-gray-300 dark:bg-gray-700 relative">
+                <ArrowRight size={10} className="absolute right-0 -top-[4px] text-gray-300 dark:text-gray-700" />
             </div>
         </div>
     );

@@ -2,11 +2,11 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import TranspilationView from "../components/stages/TranspilationView";
+import TriageView from "../components/stages/TriageView";
 import DraftingView from "../components/stages/DraftingView";
 import RefinementView from "../components/stages/RefinementView";
 import WorkflowToolbar from "../components/WorkflowToolbar";
-import { Upload, Github, FolderPlus, X, Trash2, RefreshCw } from "lucide-react";
+import { Upload, Github, FolderPlus, X, Trash2, RefreshCw, Settings, Database, ArrowRight, Save } from "lucide-react";
 import { API_BASE_URL } from "../lib/config";
 
 export default function Dashboard() {
@@ -22,6 +22,13 @@ export default function Dashboard() {
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [overwrite, setOverwrite] = useState(false);
     const [isCreating, setIsCreating] = useState(false);
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [activeProject, setActiveProject] = useState<any>(null);
+
+    // Settings State
+    const [sourceTech, setSourceTech] = useState("");
+    const [destTech, setDestTech] = useState("");
+    const [isSavingSettings, setIsSavingSettings] = useState(false);
 
     // Fetching projects from backend
     useEffect(() => {
@@ -33,11 +40,25 @@ export default function Dashboard() {
                     // Basic mapping if needed, otherwise rely on matching shape
                     setProjects(data.map((p: any) => ({
                         ...p,
+                        // Post-process count from assets_count object
+                        assets_count: p.assets_count?.[0]?.count || 0,
                         // Defaults for visual properties if missing in DB
                         progress: p.progress || 0,
                         alerts: p.alerts || 0,
                         origin: p.source_type || "Unknown",
-                        stage: p.stage || "DRAFT"
+                        stage: p.stage || "DRAFT",
+                        source_tech: p.config?.source_tech || '',
+                        dest_tech: p.config?.dest_tech || '',
+                        source_label: p.config?.source_tech === 'SSIS' ? 'SSIS' :
+                            p.config?.source_tech === 'SQL_SERVER' ? 'SQL Server' :
+                                p.config?.source_tech === 'ORACLE' ? 'Oracle' :
+                                    p.config?.source_tech === 'MYSQL' ? 'MySQL' :
+                                        p.config?.source_tech === 'INFORMATICA' ? 'Informatica' :
+                                            p.config?.source_tech === 'DATASTAGE' ? 'DataStage' : p.config?.source_tech,
+                        dest_label: p.config?.dest_tech === 'DATABRICKS' ? 'Databricks' :
+                            p.config?.dest_tech === 'SNOWFLAKE' ? 'Snowflake' :
+                                p.config?.dest_tech === 'FABRIC' ? 'Fabric' :
+                                    p.config?.dest_tech === 'AWS_GLUE' ? 'AWS Glue' : p.config?.dest_tech,
                     })));
                 } else {
                     console.error("Failed to fetch projects");
@@ -119,6 +140,49 @@ export default function Dashboard() {
         }
     };
 
+    const handleOpenSettings = (e: React.MouseEvent, project: any) => {
+        e.preventDefault();
+        setActiveProject(project);
+        setSourceTech(project.source_tech || "");
+        setDestTech(project.dest_tech || "");
+        setIsSettingsOpen(true);
+    };
+
+    const handleSaveSettings = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!activeProject) return;
+
+        setIsSavingSettings(true);
+        try {
+            const response = await fetch(`${API_BASE_URL}/projects/${activeProject.id}/config`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    source_tech: sourceTech,
+                    dest_tech: destTech
+                })
+
+            });
+
+            if (response.ok) {
+                // Update local state
+                setProjects(prev => prev.map(p =>
+                    p.id === activeProject.id
+                        ? { ...p, source_tech: sourceTech, dest_tech: destTech }
+                        : p
+                ));
+                setIsSettingsOpen(false);
+            } else {
+                alert("Error al guardar la configuración.");
+            }
+        } catch (error) {
+            console.error("Error saving settings:", error);
+            alert("Error de conexión.");
+        } finally {
+            setIsSavingSettings(false);
+        }
+    };
+
     return (
         <div className="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 relative">
             <div className="max-w-7xl mx-auto p-8">
@@ -163,7 +227,16 @@ export default function Dashboard() {
                                                 {displayStage}
                                             </div>
                                         </div>
-                                        <h3 className="text-xl font-bold mb-2 group-hover:text-primary transition-colors">{p.name}</h3>
+                                        <h3 className="text-xl font-bold mb-1 group-hover:text-primary transition-colors">{p.name}</h3>
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${p.source_tech ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600' : 'bg-gray-100 dark:bg-gray-800 text-gray-400'}`}>
+                                                {p.source_label || "DEFINIR ORIGEN"}
+                                            </span>
+                                            <ArrowRight size={10} className="text-gray-300" />
+                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${p.dest_tech ? 'bg-green-50 dark:bg-green-900/20 text-green-600' : 'bg-gray-100 dark:bg-gray-800 text-gray-400'}`}>
+                                                {p.dest_label || "DEFINIR DESTINO"}
+                                            </span>
+                                        </div>
                                         <div className="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-2 mb-4 overflow-hidden">
                                             <div className="bg-primary h-full rounded-full transition-all duration-1000" style={{ width: `${p.progress}%` }}></div>
                                         </div>
@@ -184,7 +257,8 @@ export default function Dashboard() {
                                                     onClick={async (e) => {
                                                         e.preventDefault();
                                                         if (!confirm("¿Resetear proyecto a etapa TRIAGE? Se perderá el progreso.")) return;
-                                                        await fetch(`http://localhost:8002/projects/${p.id}/reset`, { method: "POST" });
+                                                        await fetch(`${API_BASE_URL}/projects/${p.id}/reset`, { method: "POST" });
+
                                                         window.location.reload(); // Simple reload to refresh state
                                                     }}
                                                     className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors z-10"
@@ -193,6 +267,14 @@ export default function Dashboard() {
                                                     <RefreshCw size={16} /> {/* Using Refresh as Reset icon */}
                                                 </button>
                                             )}
+
+                                            <button
+                                                onClick={(e) => handleOpenSettings(e, p)}
+                                                className="p-1.5 text-gray-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-colors z-10"
+                                                title="Configurar Tecnologías"
+                                            >
+                                                <Settings size={16} />
+                                            </button>
 
                                             <button
                                                 onClick={(e) => handleDeleteProject(e, p.id)}
@@ -322,6 +404,88 @@ export default function Dashboard() {
                         </div>
                     </div>
                 )}
+
+                {/* Settings Modal */}
+                {isSettingsOpen && (
+                    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+                        <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-gray-200 dark:border-gray-800">
+                            <div className="p-4 border-b border-gray-100 dark:border-gray-800 flex justify-between items-center bg-gray-50 dark:bg-gray-800/50">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-primary/10 rounded-lg text-primary">
+                                        <Settings size={20} />
+                                    </div>
+                                    <h2 className="text-lg font-bold">Configurar Modernización</h2>
+                                </div>
+                                <button onClick={() => setIsSettingsOpen(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+                                    <X size={20} />
+                                </button>
+                            </div>
+
+                            <form onSubmit={handleSaveSettings} className="p-6 space-y-5">
+                                <p className="text-xs text-gray-500 mb-2">Define la arquitectura técnica para <span className="font-bold text-gray-900 dark:text-white">{activeProject?.name}</span>.</p>
+
+                                <div>
+                                    <label className="block text-[11px] font-bold uppercase text-gray-400 mb-1.5">Tecnología de Origen (Legacy)</label>
+                                    <select
+                                        value={sourceTech}
+                                        onChange={(e) => setSourceTech(e.target.value)}
+                                        className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all text-sm"
+                                    >
+                                        <option value="">-- Seleccionar Origen --</option>
+                                        <option value="SSIS">Microsoft SSIS (.dtsx)</option>
+                                        <option value="SQL_SERVER">SQL Server (T-SQL)</option>
+                                        <option value="ORACLE">Oracle (PL/SQL)</option>
+                                        <option value="MYSQL">MySQL / MariaDB</option>
+                                        <option value="INFORMATICA">Informatica PowerCenter</option>
+                                        <option value="DATASTAGE">IBM DataStage</option>
+                                        <option value="OTHER">Otro (Especificar en contexto)</option>
+                                    </select>
+                                </div>
+
+                                <div className="flex justify-center py-1">
+                                    <div className="w-8 h-8 rounded-full bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700 flex items-center justify-center">
+                                        <ArrowRight size={14} className="text-gray-400" />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-[11px] font-bold uppercase text-gray-400 mb-1.5">Tecnología de Destino (Cloud)</label>
+                                    <select
+                                        value={destTech}
+                                        onChange={(e) => setDestTech(e.target.value)}
+                                        className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all text-sm"
+                                    >
+                                        <option value="">-- Seleccionar Destino --</option>
+                                        <option value="DATABRICKS">Databricks (PySpark)</option>
+                                        <option value="SNOWFLAKE">Snowflake (SQL/Snowpark)</option>
+                                        <option value="FABRIC">Microsoft Fabric</option>
+                                        <option value="AWS_GLUE">AWS Glue (Spark)</option>
+                                        <option value="BIGQUERY">Google BigQuery</option>
+                                        <option value="SYNAPSE">Azure Synapse</option>
+                                    </select>
+                                </div>
+
+                                <div className="pt-4 flex gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsSettingsOpen(false)}
+                                        className="flex-1 px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 font-medium hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-sm"
+                                    >
+                                        Cancelar
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={isSavingSettings}
+                                        className="flex-1 bg-primary text-white px-4 py-2 rounded-lg font-bold hover:bg-secondary transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2 text-sm shadow-lg shadow-primary/20"
+                                    >
+                                        {isSavingSettings ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
+                                        {isSavingSettings ? "Guardando..." : "Guardar Cambios"}
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -330,7 +494,8 @@ export default function Dashboard() {
 function getStageColor(stage: string) {
     switch (stage) {
         case 'TRIAGE': return 'bg-purple-100 text-purple-700 border-purple-200';
-        case 'DRAFT': return 'bg-blue-100 text-blue-700 border-blue-200';
+        case 'DRAFT':
+        case 'DRAFTING': return 'bg-blue-100 text-blue-700 border-blue-200';
         case 'REFINEMENT': return 'bg-orange-100 text-orange-700 border-orange-200';
         case 'GOVERNANCE': return 'bg-green-100 text-green-700 border-green-200';
         default: return 'bg-gray-100 text-gray-700';

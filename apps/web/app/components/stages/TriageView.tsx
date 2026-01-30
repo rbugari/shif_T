@@ -34,6 +34,7 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
     const [isLoading, setIsLoading] = useState(true);
     const [isProcessing, setIsProcessing] = useState(false);
     const [isReadOnly, setIsReadOnly] = useState(false);
+    const [sourceTech, setSourceTech] = useState<string | undefined>(undefined); // Added state
 
     // Graph State
     const [nodes, setNodes, onNodesChange] = useNodesState<any>([]);
@@ -52,7 +53,15 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
     const handleDeleteNode = useCallback((id: string) => {
         if (isReadOnly) return;
         setNodes(nds => nds.filter(n => n.id !== id));
-        setAssets(prev => prev.map(a => a.id === id ? { ...a, type: 'IGNORED' } : a));
+        setAssets(prev => prev.map(a => a.id === id ? { ...a, selected: false } : a));
+
+        // Persist selection change to backend
+        fetch(`${API_BASE_URL}/assets/${id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ selected: false })
+        }).catch(err => console.error("Failed to persist deletion sync", err));
+
     }, [setNodes, setAssets, isReadOnly]);
 
     const enrichNodes = useCallback((nds: any[]) => {
@@ -75,7 +84,7 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
 
         // Optimistic UI Update
         setAssets(prev => prev.map(a =>
-            a.id === assetId ? { ...a, type: newCategory } : a
+            a.id === assetId ? { ...a, type: newCategory, selected: newCategory === 'CORE' ? true : (newCategory === 'IGNORED' ? false : a.selected) } : a
         ));
 
         setNodes(nds => {
@@ -89,7 +98,10 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
                     data: { label: asset?.name || assetId, category: newCategory, complexity: 'LOW', status: 'pending' }
                 };
                 return enrichNodes([...nds, newNode]);
-            } else if (newCategory === 'IGNORED' && exists) {
+            } else if ((newCategory === 'IGNORED' || newCategory === 'SUPPORT') && exists) {
+                // If it's no longer CORE, we might want to remove it from graph? 
+                // The user said "if I turn it off in grid, take it out of graph". 
+                // Let's assume ONLY CORE assets are in the graph for now.
                 return nds.filter(n => n.id !== assetId);
             }
             return nds.map(n => n.id === assetId ? { ...n, data: { ...n.data, category: newCategory } } : n);
@@ -100,7 +112,10 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
             await fetch(`${API_BASE_URL}/assets/${assetId}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ type: newCategory })
+                body: JSON.stringify({
+                    type: newCategory,
+                    selected: newCategory === 'CORE' ? true : (newCategory === 'IGNORED' ? false : undefined)
+                })
             });
         } catch (e) {
             console.error("Failed to persist category change", e);
@@ -110,10 +125,34 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
     const handleSelectionChange = useCallback(async (assetId: string, isSelected: boolean) => {
         if (isReadOnly) return;
 
-        // Optimistic Update
+        // Optimistic Update for Assets
         setAssets(prev => prev.map(a =>
             a.id === assetId ? { ...a, selected: isSelected } : a
         ));
+
+        // Synchronize with Graph Nodes
+        if (isSelected) {
+            setNodes(nds => {
+                const exists = nds.some(n => n.id === assetId);
+                if (exists) return nds;
+
+                const asset = assets.find(a => a.id === assetId);
+                const newNode = {
+                    id: assetId,
+                    type: 'custom',
+                    position: { x: window.innerWidth / 4, y: window.innerHeight / 4 }, // Add to visible-ish area
+                    data: {
+                        label: asset?.name || assetId,
+                        category: asset?.type || 'CORE',
+                        complexity: asset?.complexity || 'LOW',
+                        status: 'pending'
+                    }
+                };
+                return enrichNodes([...nds, newNode]);
+            });
+        } else {
+            setNodes(nds => nds.filter(n => n.id !== assetId));
+        }
 
         // Persist
         try {
@@ -125,7 +164,7 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
         } catch (e) {
             console.error("Failed to persist selection change", e);
         }
-    }, [isReadOnly]);
+    }, [isReadOnly, enrichNodes, assets, setNodes]);
 
     // Initialization
     useEffect(() => {
@@ -136,6 +175,15 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
                 const dataStatus = await resStatus.json();
                 const readOnly = dataStatus.status === 'DRAFTING' || dataStatus.status === 'LOCKED';
                 setIsReadOnly(readOnly);
+
+                // Fetch Project Config (NEW)
+                const resProject = await fetch(`${API_BASE_URL}/projects/${projectId}`);
+                if (resProject.ok) {
+                    const projectData = await resProject.json();
+                    if (projectData.config?.source_tech) {
+                        setSourceTech(projectData.config.source_tech);
+                    }
+                }
 
                 // Fetch Assets
                 const resAssets = await fetch(`${API_BASE_URL}/projects/${projectId}/assets`);
@@ -304,8 +352,23 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
         // Confirmation for cost
         const confirmMsg = "Esta acción ejecutará agentes de IA para analizar el repositorio. Esto incurre en costos de tokens y tiempo de procesamiento.\n\n¿Deseas continuar?";
         if (!window.confirm(confirmMsg)) return;
+        setActiveTab('logs');
+        setTriageLog("[Initializing Triage Agent]...\nWaiting for server...");
+        setIsProcessing(true);
 
-        setIsProcessing(true); // Usage of new state
+        let logInterval: any = null;
+        logInterval = setInterval(async () => {
+            try {
+                const logRes = await fetch(`${API_BASE_URL}/projects/${projectId}/logs?type=triage`);
+                if (logRes.ok) {
+                    const logData = await logRes.json();
+                    if (logData.logs) {
+                        setTriageLog(logData.logs);
+                    }
+                }
+            } catch (err) { }
+        }, 1000);
+
         try {
             const res = await fetch(`${API_BASE_URL}/projects/${projectId}/triage`, {
                 method: 'POST',
@@ -316,6 +379,9 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
                 })
             });
             const data = await res.json();
+
+            // Clear interval immediately
+            if (logInterval) clearInterval(logInterval);
 
             if (data.assets) {
                 setAssets(data.assets);
@@ -328,11 +394,34 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
             }
             if (data.log) {
                 setTriageLog(data.log);
-                setActiveTab('logs'); // Show logs initially to see progress
+            } else if (data.error) {
+                // If error, append to log
+                setTriageLog(prev => prev + "\n[ERROR] " + data.error);
+            }
+
+            // TECH MISMATCH PROMPT
+            if (data.suggested_source_tech) {
+                const msg = `El triaje detectó que la tecnología predominante es ${data.suggested_source_tech}, pero el proyecto está configurado como otra tecnología. ¿Deseas actualizar la configuración del proyecto a ${data.suggested_source_tech}?`;
+                if (window.confirm(msg)) {
+                    // Update project config
+                    try {
+                        await fetch(`${API_BASE_URL}/projects/${projectId}/config`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ source_tech: data.suggested_source_tech })
+                        });
+                        alert("Configuración actualizada correctamente.");
+                        setSourceTech(data.suggested_source_tech); // Update UI
+                    } catch (configErr) {
+                        console.error("Failed to update config during triage", configErr);
+                    }
+                }
             }
         } catch (e) {
             console.error("Triage failed", e);
+            if (logInterval) clearInterval(logInterval);
             alert("Error al ejecutar el triaje");
+            setTriageLog(prev => prev + "\n[CRITICAL ERROR] Failed to complete triage request: " + String(e));
         } finally {
             setIsProcessing(false);
         }
@@ -423,8 +512,8 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
                         </button>
                         <button
                             onClick={handleReset}
-                            disabled={isReadOnly}
-                            className={`text-gray-500 p-2 rounded-lg transition-colors ${isReadOnly ? 'opacity-50 cursor-not-allowed' : 'hover:text-red-500'}`}
+                            disabled={isReadOnly || isProcessing}
+                            className={`text-gray-500 p-2 rounded-lg transition-colors ${isReadOnly || isProcessing ? 'opacity-50 cursor-not-allowed' : 'hover:text-red-500'}`}
                             title="Limpiar Proyecto (Reiniciar)"
                         >
                             <RotateCcw size={18} />
@@ -442,11 +531,11 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
                         <div className="w-px h-6 bg-gray-200 dark:bg-gray-800 mx-1" />
                         <button
                             onClick={handleReTriage}
-                            disabled={isReadOnly}
-                            className={`bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 shadow-sm transition-all ${isReadOnly ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-700'}`}
+                            disabled={isReadOnly || isProcessing}
+                            className={`bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 shadow-sm transition-all ${isReadOnly || isProcessing ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-700'}`}
                             title="Reprocesar Triaje"
                         >
-                            <Play size={14} /> Triaje
+                            <Play size={14} /> {isProcessing ? "Running..." : "Triaje"}
                         </button>
                         <button
                             onClick={() => saveLayout(nodes, edges)}
@@ -489,9 +578,17 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
                                             <PanelLeftClose size={14} />
                                         </button>
                                     </div>
-                                    <div className="flex-1 overflow-hidden min-w-[256px] custom-scrollbar">
+                                    <div className="flex-1 overflow-hidden min-w-[256px] custom-scrollbar flex flex-col">
                                         <div className="p-4 border-b border-gray-100 dark:border-gray-800">
-                                            <DiscoveryDashboard assets={assets} nodes={nodes} />
+                                            <DiscoveryDashboard assets={assets} nodes={nodes} sourceTech={sourceTech} />
+                                        </div>
+
+                                        <div className="p-2 bg-gray-50 dark:bg-gray-950 border-b border-gray-100 dark:border-gray-800">
+                                            <input
+                                                type="text"
+                                                placeholder="Filter assets..."
+                                                className="w-full text-xs bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-md px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary"
+                                            />
                                         </div>
 
                                         {isLoading ? (
@@ -559,7 +656,16 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
                                     }}
                                     onNodesDelete={(deletedNodes: any[]) => {
                                         const deletedIds = deletedNodes.map((n: any) => n.id);
-                                        setAssets(prev => prev.map(a => deletedIds.includes(a.id) ? { ...a, type: 'IGNORED' } : a));
+                                        setAssets(prev => prev.map(a => deletedIds.includes(a.id) ? { ...a, selected: false } : a));
+
+                                        // Bulk persist selection change
+                                        deletedIds.forEach(id => {
+                                            fetch(`${API_BASE_URL}/assets/${id}`, {
+                                                method: 'PATCH',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({ selected: false })
+                                            }).catch(err => console.error("Failed to persist bulk deletion sync", err));
+                                        });
                                     }}
 
                                 />
@@ -688,10 +794,10 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
                         <div className="h-full w-full p-8 overflow-y-auto bg-gray-950 text-gray-300 font-mono text-xs leading-relaxed">
                             <div className="max-w-5xl mx-auto">
                                 <h2 className="text-xl font-bold mb-6 flex items-center gap-2 text-white">
-                                    <FileText className="text-primary" /> Log de Ejecución del Agente
+                                    <FileText className="text-primary" /> Log de Ejecución del Agente {isProcessing && <span className="text-xs text-blue-400 animate-pulse ml-2">(Running...)</span>}
                                 </h2>
                                 <div className="bg-black/50 p-6 rounded-xl border border-gray-800 shadow-inner whitespace-pre-wrap">
-                                    {triageLog}
+                                    {triageLog || "Waiting for logs..."}
                                 </div>
                             </div>
                         </div>
@@ -699,8 +805,14 @@ export default function TriageView({ projectId, onStageChange }: { projectId: st
 
                 </div>
             </div>
-            {/* Loading Overlay for Triage Process */}
-            <LoadingOverlay isVisible={isProcessing} message="Ejecutando Triaje con Agentes IA..." />
+            {/* Loading Overlay for Triage Process and Initialization */}
+            <LoadingOverlay
+                isVisible={isLoading || (isProcessing && activeTab !== 'logs')}
+                isBlocking={isProcessing && activeTab !== 'logs'} // Only block when actively running Agent A
+                message={isLoading ? "Sincronizando Estado..." : "IA Procesando Malla Técnica..."}
+                onClose={() => setIsLoading(false)} // Allow manual dismissal if stuck
+            />
+
         </ReactFlowProvider>
     );
 }

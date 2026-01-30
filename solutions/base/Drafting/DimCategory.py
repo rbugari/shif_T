@@ -11,33 +11,37 @@ from pyspark.sql.window import Window
 
 # 2. Reading Bronze / Source
 # JDBC connection details (use dbutils.secrets for credentials)
-db_url = dbutils.secrets.get(scope="jdbc-secrets", key="prod-url")
-db_user = dbutils.secrets.get(scope="jdbc-secrets", key="prod-user")
-db_password = dbutils.secrets.get(scope="jdbc-secrets", key="prod-password")
+db_url = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-url")
+db_user = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-user")
+db_password = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-password")
 
-# SSIS query: SELECT categoryid,categoryname FROM Production.Categories WHERE categoryid > ?
-# For migration, parameterize the value (e.g., categoryid > 0)
-categoryid_min = 0  # Replace with widget/parameter if needed
-sql_query = f"SELECT categoryid, categoryname FROM Production.Categories WHERE categoryid > {categoryid_min}"
+# Parameter for categoryid threshold (replace with widget or parameter as needed)
+categoryid_threshold = 0  # Default, replace with dbutils.widgets.get or parameterization
 
-# Read source data explicitly
+sql_query = f"""
+SELECT categoryid, categoryname FROM Production.Categories
+WHERE categoryid > {categoryid_threshold}
+"""
+
+# Read source data explicitly via JDBC
 source_df = (
     spark.read.format("jdbc")
     .option("url", db_url)
     .option("user", db_user)
     .option("password", db_password)
     .option("dbtable", f"({sql_query}) as src")
+    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
     .load()
 )
 
 # 3. Transformations (Apply Logic)
-# No lookups or complex logic; just direct mapping
+# No lookups or complex transforms for this task
 
 # 3.1 Surrogate Key Generation (STABLE & IDEMPOTENT)
 # SAFE MIGRATION PATTERN: Lookup existing keys, generate new ones only for new members.
 target_table_name = "DimCategory"
 bk_cols = ["categoryid"]
-sk_col = "CategoryKey"
+sk_col = "category_sk"
 
 # 1. Get Existing Keys (Handle if table doesn't exist yet)
 try:
@@ -64,14 +68,14 @@ staged_df = df_existing.unionByName(df_new)
 
 # 3.2 Unknown Member Handling (For Dimensions)
 def ensure_unknown_member(df):
-    # Define the unknown row explicitly
+    # Define the unknown member row explicitly
     unknown_row = {
         "categoryid": -1,
         "categoryname": "Unknown",
-        "CategoryKey": -1
+        "category_sk": -1
     }
-    # Check if unknown exists
-    if df.filter(col("CategoryKey") == -1).count() == 0:
+    # Check if unknown member exists
+    if df.filter(col("categoryid") == -1).count() == 0:
         unknown_df = spark.createDataFrame([unknown_row], schema=df.schema)
         df = df.unionByName(unknown_df)
     return df
@@ -79,18 +83,17 @@ def ensure_unknown_member(df):
 staged_df = ensure_unknown_member(staged_df)
 
 # 4. Mandatory Type Casting (STRICT)
-# Target schema (assumed from context):
-#   CategoryKey: INTEGER (Surrogate Key)
-#   categoryid: INTEGER (Business Key)
-#   categoryname: STRING
-staged_df = staged_df.withColumn("CategoryKey", col("CategoryKey").cast("integer"))
+# Target schema is not provided, but we must enforce types per platform rules
+# Assume: categoryid INTEGER, categoryname STRING, category_sk INTEGER
 staged_df = staged_df.withColumn("categoryid", col("categoryid").cast("integer"))
 staged_df = staged_df.withColumn("categoryname", col("categoryname").cast("string"))
+staged_df = staged_df.withColumn("category_sk", col("category_sk").cast("integer"))
 
 # 5. Writing to Silver/Gold (Apply Platform Pattern)
-# Idempotent overwrite (no SCD logic needed for static dimension)
+# Overwrite/merge logic for idempotency
+# For dimensions, use overwrite (or merge if SCD required)
 staged_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table_name)
 
 # 6. Optimization (Z-ORDER)
-deltaTable = DeltaTable.forName(spark, target_table_name)
-deltaTable.optimize().executeZOrderBy("categoryid")
+# Enable Z-ORDER on high-cardinality columns (categoryid)
+spark.sql(f"OPTIMIZE {target_table_name} ZORDER BY (categoryid)")
