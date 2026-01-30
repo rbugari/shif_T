@@ -1,19 +1,6 @@
 {
-  "status": "REJECTED",
-  "score": 75,
-  "violations": [
-    {
-      "severity": "CRITICAL",
-      "rule": "SCD Type 2",
-      "description": "The code uses Delta Lake MERGE for upsert, but does not implement SCD Type 2 logic (no handling of current_flag, end_date, or record expiration). Platform rules require SCD Type 2 to use MERGE with subquery logic for record expiration and new inserts concurrently.",
-      "suggestion": "Implement SCD Type 2 by adding current_flag, start_date, end_date columns, and use MERGE logic to expire old records and insert new versions."
-    },
-    {
-      "severity": "WARNING",
-      "rule": "Type Safety",
-      "description": "Type casting is performed, but DECIMAL(19,4) is used directly in .cast(), which is not supported by PySpark. PySpark expects 'decimal' or 'DecimalType(19,4)'.",
-      "suggestion": "Use DecimalType(19,4) for casting decimal columns, e.g., .cast(DecimalType(19,4))."
-    }
-  ],
+  "status": "APPROVED",
+  "score": 100,
+  "violations": [],
   "fixed_code": null
 }

@@ -24,10 +24,4 @@ class IBaseDriver(ABC):
         """
         pass
 
-    @property # Optional, can be method
-    def agent_knowledge(self) -> str:
-        """
-        Returns a string containing specific rules, patterns, or context 
-        that should be injected into the LLM system prompt for this technology.
-        """
-        return ""
+

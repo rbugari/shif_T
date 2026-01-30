@@ -22,33 +22,33 @@ from pyspark.sql.types import *
 from pyspark.sql.window import Window
 
 # 2. Reading Bronze / Source
-# JDBC connection details (use Databricks secrets)
-db_url = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-url")
-db_user = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-user")
-db_password = dbutils.secrets.get(scope="jdbc-secrets", key="sales-db-password")
+# JDBC connection details (replace with widgets or secrets)
+db_url = dbutils.secrets.get('scope', 'jdbc_url')
+db_user = dbutils.secrets.get('scope', 'jdbc_user')
+db_password = dbutils.secrets.get('scope', 'jdbc_password')
 
-# Parameter for custid threshold (replace with widget or parameter as needed)
-custid_threshold = dbutils.widgets.get("custid_threshold") if dbutils.widgets.get("custid_threshold", None) else 0
+# Parameter for custid filter (replace with widget or parameter)
+custid_min = dbutils.widgets.get('custid_min')
 
 source_query = f"""
 SELECT custid, contactname, city, country, address, phone, postalcode
 FROM Sales.Customers
-WHERE custid > {custid_threshold}
+WHERE custid > {custid_min}
 """
 
-# Read source data via JDBC
+# Read source data explicitly via JDBC
 source_df = (
-    spark.read.format("jdbc")
-    .option("url", db_url)
-    .option("user", db_user)
-    .option("password", db_password)
-    .option("dbtable", f"({source_query}) as src")
-    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
+    spark.read.format('jdbc')
+    .option('url', db_url)
+    .option('user', db_user)
+    .option('password', db_password)
+    .option('dbtable', f"({source_query}) as src")
+    .option('driver', 'com.microsoft.sqlserver.jdbc.SQLServerDriver')
     .load()
 )
 
 # 3. Transformations (Apply Logic)
-# No lookups or complex transforms per task definition
+# No lookups specified. Direct mapping.
 
 # 3.1 Surrogate Key Generation (STABLE & IDEMPOTENT)
 # SAFE MIGRATION PATTERN: Lookup existing keys, generate new ones only for new members.
@@ -65,7 +65,7 @@ except Exception:
     max_sk = 0
 
 # 2. Join Source with Target to find existing SKs
-if df_target:
+if df_target is not None:
     df_joined = source_df.join(df_target, on=bk_cols, how="left")
 else:
     df_joined = source_df.withColumn(sk_col, lit(None).cast("integer"))
@@ -77,7 +77,7 @@ df_new = df_joined.filter(col(sk_col).isNull()).drop(sk_col)
 df_new = df_new.withColumn(sk_col, row_number().over(window_spec) + max_sk)
 
 # 4. Union
-customer_df = df_existing.unionByName(df_new)
+staged_df = df_existing.unionByName(df_new)
 
 # 3.2 Unknown Member Handling (For Dimensions)
 def ensure_unknown_member(df):
@@ -94,43 +94,34 @@ def ensure_unknown_member(df):
     }
     # Check if unknown member exists
     if df.filter(col("CustomerKey") == -1).count() == 0:
-        unknown_df = spark.createDataFrame([unknown_row], df.schema)
+        unknown_df = spark.createDataFrame([unknown_row])
         df = df.unionByName(unknown_df)
     return df
 
-customer_df = ensure_unknown_member(customer_df)
+staged_df = ensure_unknown_member(staged_df)
 
 # 4. Mandatory Type Casting (STRICT)
-# Define target schema (as per platform rules and best practice)
-target_schema = [
-    {"name": "CustomerKey", "type": "INTEGER"},
-    {"name": "custid", "type": "INTEGER"},
-    {"name": "contactname", "type": "STRING"},
-    {"name": "city", "type": "STRING"},
-    {"name": "country", "type": "STRING"},
-    {"name": "address", "type": "STRING"},
-    {"name": "phone", "type": "STRING"},
-    {"name": "postalcode", "type": "STRING"}
-]
-for field in target_schema:
-    col_name = field["name"]
-    target_type = field["type"]
-    if col_name in customer_df.columns:
-        customer_df = customer_df.withColumn(col_name, col(col_name).cast(target_type))
-
-# 5. Writing to Silver/Gold (Apply Platform Pattern)
-# Overwrite/merge into DimCustomer table (idempotent)
-# Use Delta Lake MERGE for SCD Type 2 if needed, but here it's a dimension load (no SCD logic required)
-(
-# [DISABLED_BY_ARCHITECT]     customer_df.write
-    .format("delta")
-    .mode("overwrite")
-    .option("overwriteSchema", "true")
-# [DISABLED_BY_ARCHITECT]     .saveAsTable(target_table_name)
+# Target schema is not provided, so we infer types based on platform rules and typical dimension structure
+# If you have the schema, replace the following with exact types
+staged_df = (
+    staged_df
+    .withColumn("CustomerKey", col("CustomerKey").cast("integer"))
+    .withColumn("custid", col("custid").cast("integer"))
+    .withColumn("contactname", col("contactname").cast("string"))
+    .withColumn("city", col("city").cast("string"))
+    .withColumn("country", col("country").cast("string"))
+    .withColumn("address", col("address").cast("string"))
+    .withColumn("phone", col("phone").cast("string"))
+    .withColumn("postalcode", col("postalcode").cast("string"))
 )
 
+# 5. Writing to Silver/Gold (Apply Platform Pattern)
+# Overwrite the dimension table (idempotent)
+# [DISABLED_BY_ARCHITECT] staged_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table_name)
+
 # 6. Optimization (Z-ORDER)
-# [DISABLED_BY_ARCHITECT] spark.sql(f"OPTIMIZE {target_table_name} ZORDER BY (custid)")
+deltaTable = DeltaTable.forName(spark, target_table_name)
+deltaTable.optimize().zorderBy("custid")
 
 
 # Apply Bronze Standard

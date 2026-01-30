@@ -31,6 +31,39 @@ class DeveloperService:
         with open(self.prompt_path, "r", encoding="utf-8") as f:
             return f.read()
 
+    def _get_migration_rules(self, source_type: str, target_lang: str = None) -> str:
+        """
+        Determines and loads the correct migration rules based on Source Type and Target Lang.
+        """
+        import os
+        if not target_lang:
+            target_lang = os.getenv("TARGET_LANG", "pyspark").lower()
+        else:
+            target_lang = target_lang.lower()
+        
+        # Map source types to file prefixes
+        source_prefix = "sql" # default
+        if "SSIS" in source_type.upper():
+            source_prefix = "ssis"
+        elif "SQL" in source_type.upper():
+            source_prefix = "sql"
+            
+        rule_filename = f"{source_prefix}_{target_lang}.md"
+        
+        # Construct path: apps/api/prompts/knowledge/filename
+        # self.prompt_path is .../prompts/developer_transpiler.md
+        base_dir = os.path.dirname(self.prompt_path) # apps/api/prompts
+        knowledge_path = os.path.join(base_dir, "knowledge", rule_filename)
+        
+        try:
+            if os.path.exists(knowledge_path):
+                with open(knowledge_path, "r", encoding="utf-8") as f:
+                    return f.read()
+            else:
+                return f"WARN: No migration rules found for {source_prefix} -> {target_lang} at {knowledge_path}"
+        except Exception as e:
+            return f"WARN: Error loading rules: {str(e)}"
+
     def compile_prompt(self, platform_spec: Dict[str, Any], knowledge_context: str = "") -> str:
         """Returns the system prompt merged with standards and knowledge context."""
         prompt = self._load_prompt()
@@ -44,13 +77,24 @@ class DeveloperService:
                             task_def: Dict[str, Any], 
                             platform_spec: Dict[str, Any], 
                             schema_ref: Dict[str, Any],
-                            knowledge_context: str = "") -> Dict[str, Any]:
+                            knowledge_context: str = "",
+                            target_lang: str = None) -> Dict[str, Any]:
         """
         Generates code for a specific task/package.
         """
         logger.info(f"Generating code for task: {task_def.get('package_name')}", "Developer")
         system_prompt = self._load_prompt()
         
+        # Dynamic Knowledge Injection if not provided
+        if not knowledge_context or knowledge_context.startswith("<!--"):
+            # Determine source type from task/package or assume default based on flow
+            # For now, SSIS Packages usually end in .dtsx, SQL in .sql
+            # task_def 'package_name' gives a hint.
+            pkg_name = task_def.get('package_name', '')
+            source_type = "SSIS" if ".dtsx" in pkg_name or "Package" in pkg_name else "SQL"
+            
+            knowledge_context = self._get_migration_rules(source_type, target_lang)
+
         # Prepare Context
         # Filter schema ref to only relevant tables if possible, 
         # but for now passing full context (or a summarized version is better for token limits).

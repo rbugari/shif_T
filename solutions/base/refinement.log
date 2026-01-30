@@ -14,7 +14,7 @@
 [Profiler] Analyzing file: DimSupplier.py...
 [Profiler]   > Detected PK candidates for DimSupplier.py (DIMENSION): ['supplierid']
 [Profiler] Analyzing file: FactSales.py...
-[Profiler]   > Detected PK candidates for FactSales.py (FACT): ['orderid']
+[Profiler]   > Detected PK candidates for FactSales.py (FACT): ['orderid', 'productid']
 [Profiler] Profile metadata saved to C:\proyectos_dev\ShifT\solutions\Base\Refinement\profile_metadata.json
 [Profiler] Complete. Analyzed 7 files.
 [Architect] Segmenting into Medallion Architecture (Bronze/Silver/Gold)...
@@ -90,7 +90,7 @@
 [OpsAuditor] OK: DimProduct_silver.py uses PK '['ProductID']' for MERGE.
 [OpsAuditor] OK: DimShipper_silver.py uses PK '['shipperid']' for MERGE.
 [OpsAuditor] OK: DimSupplier_silver.py uses PK '['supplierid']' for MERGE.
-[OpsAuditor] OK: FactSales_silver.py uses PK '['orderid']' for MERGE.
+[OpsAuditor] OK: FactSales_silver.py uses PK '['orderid', 'productid']' for MERGE.
 [OpsAuditor] Generating Infrastructure-as-Code (IaC) manifests...
 [OpsAuditor] Generating Operational Handbook (README_DEVOPS.md)...
 [OpsAuditor] Audit Complete.

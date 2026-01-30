@@ -28,15 +28,56 @@ class AgentCService:
         with open(target_path, "r", encoding="utf-8") as f:
             return f.read()
 
-    @logger.llm_debug("Agent-C-Developer")
-    async def transpile_task(self, node_data: Dict[str, Any], context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Transpiles a single SSIS task into PySpark code following defined standards."""
+    def _get_migration_rules(self, source_type: str, target_lang: str = None) -> str:
+        """
+        Determines and loads the correct migration rules based on Source Type and Target Lang.
+        Example: source=sql, target=snowpark -> Loads knowledge/sql_snowpark.md
+        """
+        import os
+        if not target_lang:
+            target_lang = os.getenv("TARGET_LANG", "pyspark").lower()
+        else:
+            target_lang = target_lang.lower()
+        
+        # Map source types to file prefixes
+        # e.g. SQL_SCRIPT -> sql, SSIS_PACKAGE -> ssis
+        source_prefix = "sql" # default
+        if "SSIS" in source_type.upper():
+            source_prefix = "ssis"
+        elif "SQL" in source_type.upper():
+            source_prefix = "sql"
+            
+        rule_filename = f"{source_prefix}_{target_lang}.md"
+        
+        # Construct path: apps/api/prompts/knowledge/filename
+        base_dir = os.path.dirname(self.prompt_path) # apps/api/prompts
+        knowledge_path = os.path.join(base_dir, "knowledge", rule_filename)
+        
+        try:
+            if os.path.exists(knowledge_path):
+                with open(knowledge_path, "r", encoding="utf-8") as f:
+                    return f.read()
+            else:
+                return f"WARN: No migration rules found for {source_prefix} -> {target_lang} at {knowledge_path}"
+        except Exception as e:
+            return f"WARN: Error loading rules: {str(e)}"
+
+    async def transpile_task(self, node_data: Dict[str, Any], context: Dict[str, Any] = None, target_lang: str = None) -> Dict[str, Any]:
+        """Transpiles a single SSIS task into PySpark/Snowpark code following defined standards."""
         system_prompt = self._load_prompt(self.prompt_path)
         standards = self._load_prompt(self.standards_path)
+        
+        # Dynamic Knowledge Injection
+        effective_target = (target_lang or os.getenv("TARGET_LANG", "pyspark")).lower()
+        source_type = node_data.get('type', 'UNKNOWN')
+        migration_rules = self._get_migration_rules(source_type, effective_target)
         
         human_content = f"""
         CODING STANDARDS TO FOLLOW:
         {standards}
+
+        MIGRATION KNOWLEDGE ({effective_target.upper()}):
+        {migration_rules}
 
         TRANSPILE THE FOLLOWING TASK:
         Task Name: {node_data.get('name')}

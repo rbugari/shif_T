@@ -85,9 +85,26 @@ class MigrationOrchestrator:
                 "failed": []
             }
 
-        # 0.5. Load Knowledge Context (Drivers)
-        knowledge_context = DiscoveryService.get_global_knowledge_context()
-        logger.info("Loaded Knowledge Context from Drivers.", "Orchestrator")
+        # 0.5. Load Target Tech from Config (Matrix Architecture)
+        target_lang = "pyspark" # Default
+        try:
+            # Re-resolve UUID just in case (though project_id should be UUID here)
+            # We use persistence instance if available
+            db = SupabasePersistence()
+            meta = await db.get_project_metadata(self.project_id)
+            if meta and meta.get("config"):
+                dest_tech = meta["config"].get("dest_tech", "DATABRICKS")
+                if dest_tech == "SNOWFLAKE":
+                    target_lang = "snowpark"
+                elif dest_tech == "DATABRICKS":
+                    target_lang = "pyspark"
+                # Add others if needed
+            logger.info(f"Target Language Resolved: {target_lang.upper()}", "Orchestrator")
+        except Exception as e:
+            logger.warning(f"Failed to load project config, using default PySpark: {e}", "Orchestrator")
+            
+        knowledge_context = "" # Context is now loaded by DeveloperService using target_lang 
+        # logger.info("Loaded Knowledge Context from Drivers.", "Orchestrator")
 
         # 1. THE LIBRARIAN (Context)
         logger.info("Step 1: Librarian - Scanning Schema Context...", "Orchestrator")
@@ -148,7 +165,8 @@ class MigrationOrchestrator:
                     task_def, 
                     self.platform_spec, 
                     schema_ref,
-                    knowledge_context=knowledge_context
+                    knowledge_context=knowledge_context,
+                    target_lang=target_lang # Pass target_lang here
                 )
                 notebook_content = code_result.get("notebook_content", "")
                 

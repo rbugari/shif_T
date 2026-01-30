@@ -50,20 +50,4 @@ class SSISDriver(IBaseDriver):
             "metadata": metadata
         }
 
-    @property
-    def agent_knowledge(self) -> str:
-        return """
-        ### TECHNOLOGY CONTEXT: SSIS (SQL Server Integration Services)
-        - **Format**: XML-based (.dtsx).
-        - **Core Components**:
-          - **Control Flow**: Executables (Tasks, Containers) that define workflow orchestration.
-          - **Data Flow**: Pipelines (Components) that move data buffers (Sources -> Transforms -> Destinations).
-        - **Key Constraints**:
-          - Lookups are memory-intensive.
-          - Scripts (VB/C#) are black boxes requiring special attention.
-          - Execute Package Tasks imply dependencies.
-        - **Migration Strategy**:
-          - **Control Flow** -> Airflow DAGs / Databricks Notebook Workflows.
-          - **Data Flow** -> PySpark DataFrames.
-          - **Expressions** -> Python f-strings or Column Expressions.
-        """
+

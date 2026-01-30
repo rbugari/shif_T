@@ -14,13 +14,7 @@ class DiscoveryService:
         SQLDriver()
     ]
 
-    @staticmethod
-    def get_global_knowledge_context() -> str:
-        """Returns the combined knowledge base of all registered drivers."""
-        context = []
-        for driver in DiscoveryService.drivers:
-            context.append(driver.agent_knowledge)
-        return "\n\n".join(context)
+
 
     @staticmethod
     def generate_manifest(project_id: str) -> Dict[str, Any]:
@@ -77,20 +71,12 @@ class DiscoveryService:
         
         print(f"DEBUG_SCAN: Total files found in inventory: {len(inventory)}")
 
-        # Collect Knowledge from Active Drivers
-        knowledge_context = []
-        for driver in DiscoveryService.drivers:
-            # Check if this driver was active (by class name or instance)
-            if driver.__class__.__name__ in active_drivers:
-                knowledge_context.append(driver.agent_knowledge)
-
         # 2. Construct Manifest
         return {
             "project_id": project_id,
             "root_path": project_path,
             "tech_stats": tech_counts,
-            "file_inventory": inventory,
-            "knowledge_context": "\n\n".join(knowledge_context)
+            "file_inventory": inventory
         }
 
     @staticmethod

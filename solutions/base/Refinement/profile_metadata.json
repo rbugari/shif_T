@@ -48,7 +48,8 @@
         },
         "FactSales.py": {
             "pk": [
-                "orderid"
+                "orderid",
+                "productid"
             ],
             "type": "FACT"
         }
@@ -73,7 +74,8 @@
             "supplierid"
         ],
         "FactSales.py": [
-            "orderid"
+            "orderid",
+            "productid"
         ]
     },
     "total_files": 7

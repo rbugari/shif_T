@@ -11,16 +11,16 @@ from pyspark.sql.window import Window
 
 # 2. Reading Bronze / Source
 # JDBC connection details (use dbutils.secrets for credentials)
-db_url = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-url")
-db_user = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-user")
-db_password = dbutils.secrets.get(scope="jdbc-secrets", key="sqlserver-password")
+db_url = dbutils.secrets.get(scope="jdbc-secrets", key="db_url")
+db_user = dbutils.secrets.get(scope="jdbc-secrets", key="db_user")
+db_password = dbutils.secrets.get(scope="jdbc-secrets", key="db_password")
 
-# Parameter for categoryid threshold (replace with widget or parameter as needed)
-categoryid_threshold = 0  # Default, replace with dbutils.widgets.get or parameterization
+# Parameter for categoryid filter (replace with widget or parameter as needed)
+categoryid_param = dbutils.widgets.get("categoryid_param")
 
 sql_query = f"""
 SELECT categoryid, categoryname FROM Production.Categories
-WHERE categoryid > {categoryid_threshold}
+WHERE categoryid > {categoryid_param}
 """
 
 # Read source data explicitly via JDBC
@@ -30,18 +30,17 @@ source_df = (
     .option("user", db_user)
     .option("password", db_password)
     .option("dbtable", f"({sql_query}) as src")
-    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
     .load()
 )
 
 # 3. Transformations (Apply Logic)
-# No lookups or complex transforms for this task
+# No lookups or complex logic required for this dimension
 
 # 3.1 Surrogate Key Generation (STABLE & IDEMPOTENT)
 # SAFE MIGRATION PATTERN: Lookup existing keys, generate new ones only for new members.
 target_table_name = "DimCategory"
 bk_cols = ["categoryid"]
-sk_col = "category_sk"
+sk_col = "CategorySK"
 
 # 1. Get Existing Keys (Handle if table doesn't exist yet)
 try:
@@ -64,15 +63,15 @@ df_new = df_joined.filter(col(sk_col).isNull()).drop(sk_col)
 df_new = df_new.withColumn(sk_col, row_number().over(window_spec) + max_sk)
 
 # 4. Union
-staged_df = df_existing.unionByName(df_new)
+category_df = df_existing.unionByName(df_new)
 
 # 3.2 Unknown Member Handling (For Dimensions)
 def ensure_unknown_member(df):
-    # Define the unknown member row explicitly
+    # Define the schema for the unknown member
     unknown_row = {
         "categoryid": -1,
         "categoryname": "Unknown",
-        "category_sk": -1
+        "CategorySK": -1
     }
     # Check if unknown member exists
     if df.filter(col("categoryid") == -1).count() == 0:
@@ -80,20 +79,31 @@ def ensure_unknown_member(df):
         df = df.unionByName(unknown_df)
     return df
 
-staged_df = ensure_unknown_member(staged_df)
+category_df = ensure_unknown_member(category_df)
 
 # 4. Mandatory Type Casting (STRICT)
-# Target schema is not provided, but we must enforce types per platform rules
-# Assume: categoryid INTEGER, categoryname STRING, category_sk INTEGER
-staged_df = staged_df.withColumn("categoryid", col("categoryid").cast("integer"))
-staged_df = staged_df.withColumn("categoryname", col("categoryname").cast("string"))
-staged_df = staged_df.withColumn("category_sk", col("category_sk").cast("integer"))
+# Target schema is not provided, so we infer from business logic and platform rules
+# categoryid: INTEGER, categoryname: STRING, CategorySK: INTEGER
+category_df = (
+    category_df
+    .withColumn("categoryid", col("categoryid").cast("integer"))
+    .withColumn("categoryname", col("categoryname").cast("string"))
+    .withColumn("CategorySK", col("CategorySK").cast("integer"))
+)
 
 # 5. Writing to Silver/Gold (Apply Platform Pattern)
-# Overwrite/merge logic for idempotency
-# For dimensions, use overwrite (or merge if SCD required)
-staged_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table_name)
+# Overwrite/merge logic for dimension table
+# Use Delta Lake MERGE for idempotency
 
-# 6. Optimization (Z-ORDER)
-# Enable Z-ORDER on high-cardinality columns (categoryid)
-spark.sql(f"OPTIMIZE {target_table_name} ZORDER BY (categoryid)")
+delta_table = DeltaTable.forName(spark, target_table_name)
+
+# Prepare staged data for merge
+staged_df = category_df
+
+# Merge logic: match on business key (categoryid)
+delta_table.alias("target").merge(
+    staged_df.alias("source"),
+    "target.categoryid = source.categoryid"
+).whenMatchedUpdateAll(
+).whenNotMatchedInsertAll(
+).execute()

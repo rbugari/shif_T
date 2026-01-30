@@ -1,114 +1,107 @@
-# Knowledge Drivers: El "Cerebro Técnico" de Shift-T
+# Knowledge Drivers & Matrix Architecture: El "Cerebro Modular" de Shift-T
 
 > [!NOTE]
 > **Para No-Técnicos (For Dummies):**
-> Imagina que Shift-T es un traductor universal. Pero traducir poesía (código humano) es difícil.
-> Los **Knowledge Drivers** son como "diccionarios especializados" que le damos al traductor.
-> *   Si el archivo es francés antiguo (.dtsx), le damos el diccionario de francés.
-> *   Si es jeroglífico (.sql), le damos el de jeroglíficos.
+> Imagina que Shift-T es una **Agencia de Traducción Universal**.
+> Antes, cada traductor tenía que saber todo (leer Chino y escribir Español).
 > 
-> Sin estos drivers, la IA intentaría adivinar. Con los drivers, la IA **sabe** las reglas exactas antes de empezar.
+> Ahora, hemos separado el trabajo en dos departamentos:
+> 1.  **Lectores (Drivers)**: Expertos que solo leen. Uno lee Jeroglíficos, otro lee Francés antiguo. Extraen el "significado" y se lo pasan al jefe.
+> 2.  **Escritores (Estrategias)**: Expertos que solo escriben. Uno escribe Novelas, otro escribe Tweets.
+> 
+> **La Magia (La Matrix):**
+> El jefe (Agente C) mira qué recibe y qué necesita.
+> *   ¿Entrada Jeroglífico? -> Llama al Lector de Egipto.
+> *   ¿Salida Novela? -> Llama al Escritor de Literatura.
+> *   **Resultado:** Combinaciones infinitas sin re-entrenar a nadie.
 
 ---
 
-## 1. ¿Qué es un Knowledge Driver?
+## 1. La Arquitectura Matrix ($N \times M$)
 
-Shift-T no está "hardcodeado" para una sola tecnología. En su lugar, utiliza un sistema de **Drivers Conectables (Pluggable Drivers)**. Un driver es un pequeño módulo de código que enseña al sistema cómo manejar un tipo específico de archivo.
+Shift-T ha evolucionado de un modelo "Monolítico" a un modelo "Matricial Desacoplado".
 
-### ¿Cómo funciona?
+### Entrada: Los Drivers (Lectores)
+Su única misión es **entender el legado**. No saben nada sobre a dónde van los datos.
+*   **Path**: `apps/api/services/drivers/*.py`
+*   **Responsabilidad**: Análisis léxico, extracción de metadatos, detección de dependencias.
+*   **Ejemplos**:
+    *   `SSISDriver`: Lee XMLs complejos (`.dtsx`).
+    *   `SQLDriver`: Lee dialectos T-SQL, PL/SQL, MySQL.
 
-1.  **Escaneo**: Cuando subes tu proyecto, el `DiscoveryService` mira cada archivo.
-2.  **Selección**: Si el archivo termina en `.sql`, despierta al `SQLDriver`. Si termina en `.dtsx`, despierta al `SSISDriver`.
-3.  **Extracción**: El driver lee el archivo e identifica "firmas" (pistas de qué dialecto es).
-4.  **Inyección**: El driver entrega su **"Conocimiento de Agente" (Agent Knowledge)** al sistema.
-
----
-
-## 2. Inyección de Contexto (Prompt Combination)
-
-Aquí es donde ocurre la magia. La IA no usa un solo prompt gigante. Shift-T construye el prompt **dinámicamente** combinando tres capas:
-
-1.  **Prompt del Sistema (La Personalidad)**: "Eres un experto en migración a la nube..."
-2.  **Conocimiento del Proyecto (El Mapa)**: "Estás trabajando en el proyecto ClienteX..."
-3.  **Conocimiento del Driver (La Técnica)**: *Aquí entra el driver.*
-
-### Ejemplo Real (SQL Driver)
-
-Si el `SQLDriver` detecta que tu código es **Oracle PL/SQL**, inyecta secretamente este texto en el cerebro de la IA:
-
-> "Estás analizando Oracle. Si ves `DBMS_OUTPUT`, es un print. Si ves un `CURSOR`, es un bucle lento; conviértelo a lógica de DataFrames en PySpark. No uses bucles `for` si puedes usar operaciones vectorizadas."
-
-**Resultado:** La IA genera código optimizado para Spark sin que tú se lo pidas.
+### Salida: El Conocimiento (Escritores)
+Su única misión es **conocer el destino**. No saben de dónde vienen los datos.
+*   **Path**: `apps/api/prompts/knowledge/*.md`
+*   **Responsabilidad**: Reglas de sintaxis, mejores prácticas, optimizaciones específicas del target.
+*   **Ejemplos**:
+    *   `sql_pyspark.md`: Cómo convertir SQL a Databricks (PySpark).
+    *   `sql_snowpark.md`: Cómo convertir SQL a Snowflake (Snowpark).
 
 ---
 
-## 3. Los Drivers en las Fases del Proceso
+## 2. Inyección Dinámica de Lógica
 
-Los drivers trabajan silenciosamente en cada etapa de la migración. Aquí tienes el detalle de cómo influyen:
+El Agente C (Developer) actúa como el "Broker" que conecta ambos mundos en tiempo de ejecución.
 
-### Fase 1: Discovery (El Bibliotecario)
-*   **Driver**: Escanea los archivos "crudos".
-*   **Acción**: Clasifica el archivo. ¿Es basura o es crítico?
-*   **Ejemplo**: El `SSISDriver` abre un archivo `.dtsx` (que es XML complejo) y le dice al Bibliotecario: *"Oye, esto no es texto, es un paquete ETL que mueve datos de A a B"*.
+1.  **Detección**: El Agente C recibe una tarea. El Driver ya dijo: "Esto es **SQL**".
+2.  **Configuración**: El Agente C mira tu variable de entorno `TARGET_LANG` (ej. `snowpark`).
+3.  **Carga (Load)**: Busca el archivo de conocimiento exacto para esa combinación:
+    > `apps/api/prompts/knowledge/sql_snowpark.md`
+4.  **Inyección**: Inyecta esas reglas específicas en el prompt del LLM.
 
-### Fase 2: Topology (El Cartógrafo)
-*   **Driver**: Busca conexiones invisibles.
-*   **Acción**: Encuentra dependencias.
-*   **Ejemplo**: El `SQLDriver` lee un script y ve `EXEC sp_Facturacion`. Le dice al Cartógrafo: *"Este archivo depende del procedimiento 'sp_Facturacion', dibuja una flecha entre ellos en el mapa"*.
-
-### Fase 3: Drafting (El Intérprete)
-*   **Driver**: Aporta las reglas de traducción.
-*   **Acción**: Guía la generación de código.
-*   **Ejemplo**: Al convertir SSiS, el `SSISDriver` advierte: *"Cuidado, este componente 'Lookup' gasta mucha memoria. Al traducirlo a Python, usa un Broadcast Join de Spark"*.
+### ¿Por qué es mejor?
+Si mañana quieres migrar a **Google BigQuery**:
+1.  **NO** tocas código Python.
+2.  Solo creas un archivo de texto: `knowledge/sql_bigquery.md`.
+3.  Cambias `.env`: `TARGET_LANG=bigquery`.
+4.  ¡Listo! El sistema aprende instantáneamente.
 
 ---
 
-## 4. Drivers Disponibles y Soporte
+## 3. Configuración
 
-Actualmente Shift-T incluye los siguientes drivers "de caja":
+Para cambiar el destino de tu migración, simplemente edita tu archivo `.env`:
 
-### 🔵 SSIS Driver (.dtsx)
-Especialista en integración de datos de Microsoft.
-*   **Detecta**: Flujos de Datos, Flujos de Control, Variables, Conexiones.
-*   **Regla de Oro**: "Todo DataFlow se convierte en un DataFrame de Spark".
+```bash
+# Opción A: Databricks / Delta Lake (Por defecto)
+TARGET_LANG="pyspark"
 
-### 🟠 SQL Driver (.sql)
-Un políglota que entiende varios dialectos.
-*   **Detecta**:
-    *   **T-SQL (SQL Server)**: Busca `IDENTITY`, `TOP`, `USE`.
-    *   **PL/SQL (Oracle)**: Busca `VARCHAR2`, `EXCEPTION`, `DUAL`.
-    *   **MySQL**: Busca `AUTO_INCREMENT`, comillas invertidas (` `).
-*   **Regla de Oro**: "La lógica de conjuntos (SELECT/JOIN) se mantiene. La lógica procedimental (Cursores/While) se reescribe en Python nativo".
-
-### 🐍 Python Driver (.py) - *Genérico*
-Para scripts existentes.
-*   **Detecta**: Uso de librerías como `pandas`, `pyspark`, o llamadas al sistema `os.system`.
+# Opción B: Snowflake / Snowpark
+TARGET_LANG="snowpark"
+```
 
 ---
 
-## 5. Ejemplo para Tontos: "La Receta de Cocina" 🍳
+## 4. Ejemplo Real: La Receta 🍳
 
-Imagina que estás traduciendo recetas de cocina para un robot chef moderno (**La Nube**).
+**Situación**: Tienes una receta (Código) que dice "Cocer a fuego lento" (Legacy).
 
-**Sin Driver:**
-*   **Entrada**: "Echar una pizca de sal" (Receta de la Abuela).
-*   **IA (Confundida)**: "¿Qué es una pizca? ¿Cuantos gramos? Error."
+### Caso A: Destino "Restaurante de Lujo" (PySpark)
+*   **Driver (Input)**: Lee "Cocer a fuego lento". Entiende "Cocción lenta".
+*   **Knowledge (Output)**: En el Restaurante de Lujo, "Cocción lenta" se traduce como **"Sous-vide a 65°C por 4 horas"**.
+*   **Resultado**: Código optimizado para precisión y calidad.
 
-**Con Driver (El Nieto que sabe cocinar):**
-*   **Entrada**: "Echar una pizca de sal".
-*   **Driver**: "¡Alto! 'Pizca' en el idioma de la Abuela significa exactamente 1.5 gramos."
-*   **IA (Informada)**: "Añadiendo 1.5 gramos de cloruro de sodio." -> **Código Perfecto.**
+### Caso B: Destino "Comida Rápida" (Snowpark)
+*   **Driver (Input)**: Lee "Cocer a fuego lento". Entiende "Cocción lenta".
+*   **Knowledge (Output)**: En Comida Rápida, "Cocción lenta" se traduce como **"Olla a presión por 15 minutos"**.
+*   **Resultado**: Código optimizado para velocidad nativa en la base de datos.
 
-### En Código:
-*   **Entrada**: `SELECT TOP 10 * FROM Clientes` (SQL Server).
-*   **Driver**: "En la nube no se dice `TOP`, se dice `.limit()`".
-*   **Salida**: `spark.table("Clientes").limit(10)` (PySpark).
+> **Nota**: El Driver (Lector) nunca cambió. Solo cambiamos el libro de reglas del destino.
+
+---
+
+## 5. Drivers Disponibles
+
+| Tecnología (Source) | Driver | Archivos | Capacidad |
+| :--- | :--- | :--- | :--- |
+| **Microsoft SSIS** | `SSISDriver` | `.dtsx` | Lee Control Flow, Data Flow, Scripts VB.NET |
+| **SQL (Varios)** | `SQLDriver` | `.sql` | Detecta T-SQL, PL/SQL, MySQL, DDL, DML |
+| **Python Legacy** | `PythonDriver` | `.py` | Detecta Pandas antiguo, scripts OS |
 
 ---
 
 > [!TIP]
 > **¿Quieres añadir tu propia tecnología?**
-> Solo necesitas crear un archivo Python en `apps/api/services/drivers/` que diga:
-> 1. Qué extensión buscar (ej. `.cob` para Cobol).
-> 2. Qué reglas de traducción aplicar.
-> ¡Shift-T lo cargará automáticamente!
+> 1. Crea un **Driver** en Python que sepa *leer* tu archivo.
+> 2. Crea un archivo **Markdown** en `knowledge/` que sepa *escribir* tu destino.
+> 3. ¡Disfruta de la Matrix!

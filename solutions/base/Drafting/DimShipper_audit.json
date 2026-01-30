@@ -5,8 +5,8 @@
     {
       "severity": "WARNING",
       "rule": "Type Safety",
-      "description": "The code uses string literals ('integer', 'string') for type casting. While PySpark accepts these, using Spark SQL types (IntegerType, StringType) is more robust and less error-prone.",
-      "suggestion": "Consider using pyspark.sql.types (e.g., IntegerType()) for explicit type safety, especially if schema evolves or is reused."
+      "description": "Type casting is performed, but the schema is inferred and may not strictly match the target schema if there are additional columns or mismatches. Ensure the target schema is explicitly defined and all columns are cast accordingly.",
+      "suggestion": "Provide the explicit target schema and cast all columns to their correct types as per the platform rules."
     }
   ],
   "fixed_code": null

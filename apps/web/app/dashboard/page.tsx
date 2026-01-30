@@ -457,11 +457,13 @@ export default function Dashboard() {
                                     >
                                         <option value="">-- Seleccionar Destino --</option>
                                         <option value="DATABRICKS">Databricks (PySpark)</option>
-                                        <option value="SNOWFLAKE">Snowflake (SQL/Snowpark)</option>
+                                        <option value="SNOWFLAKE">Snowflake (Snowpark)</option>
+                                        {/* 
                                         <option value="FABRIC">Microsoft Fabric</option>
                                         <option value="AWS_GLUE">AWS Glue (Spark)</option>
                                         <option value="BIGQUERY">Google BigQuery</option>
-                                        <option value="SYNAPSE">Azure Synapse</option>
+                                        <option value="SYNAPSE">Azure Synapse</option> 
+                                        */}
                                     </select>
                                 </div>
 

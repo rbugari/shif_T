@@ -10,28 +10,30 @@ from pyspark.sql.types import *
 from pyspark.sql.window import Window
 
 # 2. Reading Bronze / Source
-# JDBC connection details (use Databricks secrets)
+# JDBC connection details (use dbutils.secrets for credentials)
 db_url = dbutils.secrets.get(scope="HR_DB", key="jdbc_url")
 db_user = dbutils.secrets.get(scope="HR_DB", key="username")
 db_password = dbutils.secrets.get(scope="HR_DB", key="password")
 
-# Parameter for empid filter (replace with widget or parameter as needed)
-empid_param = dbutils.widgets.get("empid_param")
+# Parameter for empid threshold (replace with widget or parameter as needed)
+empid_threshold = dbutils.widgets.get("empid_threshold")
 
 source_query = f"""
 SELECT empid, (firstname + ' ' + lastname) as fullname, title, city, country, address, phone
 FROM HR.Employees
-WHERE empid > {empid_param}
+WHERE empid > {empid_threshold}
 """
 
-# Read source data via JDBC
-source_options = {
-    "url": db_url,
-    "user": db_user,
-    "password": db_password,
-    "dbtable": f"({source_query}) as src"
-}
-df_source = spark.read.format("jdbc").options(**source_options).load()
+# Read source data explicitly via JDBC
+source_df = (
+    spark.read.format("jdbc")
+    .option("url", db_url)
+    .option("user", db_user)
+    .option("password", db_password)
+    .option("dbtable", f"({source_query}) as src")
+    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver")
+    .load()
+)
 
 # 3. Transformations (Apply Logic)
 # No lookups specified. Direct mapping.
@@ -52,9 +54,9 @@ except Exception:
 
 # 2. Join Source with Target to find existing SKs
 if df_target is not None:
-    df_joined = df_source.join(df_target, on=bk_cols, how="left")
+    df_joined = source_df.join(df_target, on=bk_cols, how="left")
 else:
-    df_joined = df_source.withColumn(sk_col, lit(None).cast("integer"))
+    df_joined = source_df.withColumn(sk_col, lit(None).cast("integer"))
 
 # 3. Generate Keys for New Rows ONLY
 window_spec = Window.orderBy(*bk_cols)
@@ -63,15 +65,10 @@ df_new = df_joined.filter(col(sk_col).isNull()).drop(sk_col)
 df_new = df_new.withColumn(sk_col, row_number().over(window_spec) + max_sk)
 
 # 4. Union
-from pyspark.sql import DataFrame
-if df_existing.count() > 0:
-    df_with_sk = df_existing.unionByName(df_new)
-else:
-    df_with_sk = df_new
+staged_df = df_existing.unionByName(df_new)
 
 # 3.2 Unknown Member Handling (For Dimensions)
 def ensure_unknown_member(df):
-    # Define the schema for the unknown member
     unknown_row = {
         "EmployeeKey": -1,
         "empid": -1,
@@ -82,37 +79,49 @@ def ensure_unknown_member(df):
         "address": "Unknown",
         "phone": "Unknown"
     }
-    # Check if unknown member exists
+    # Check if unknown exists
     if df.filter(col("EmployeeKey") == -1).count() == 0:
         unknown_df = spark.createDataFrame([unknown_row])
         df = df.unionByName(unknown_df)
     return df
 
-df_final = ensure_unknown_member(df_with_sk)
+staged_df = ensure_unknown_member(staged_df)
 
 # 4. Mandatory Type Casting (STRICT)
-# Target schema is not provided, so we infer types based on platform rules and typical dimension design
-# EmployeeKey: INTEGER
-# empid: INTEGER
-# fullname: STRING
-# title: STRING
-# city: STRING
-# country: STRING
-# address: STRING
-# phone: STRING
+# Target schema is not provided, so infer types based on platform rules and SSIS types
+# empid: DT_I4 -> INTEGER
+# fullname: DT_WSTR -> STRING
+# title: DT_WSTR -> STRING
+# city: DT_WSTR -> STRING
+# country: DT_WSTR -> STRING
+# address: DT_WSTR -> STRING
+# phone: DT_WSTR -> STRING
+# EmployeeKey: Surrogate Key -> INTEGER
 
-df_final = df_final.withColumn("EmployeeKey", col("EmployeeKey").cast("integer"))\
-    .withColumn("empid", col("empid").cast("integer"))\
-    .withColumn("fullname", col("fullname").cast("string"))\
-    .withColumn("title", col("title").cast("string"))\
-    .withColumn("city", col("city").cast("string"))\
-    .withColumn("country", col("country").cast("string"))\
-    .withColumn("address", col("address").cast("string"))\
+staged_df = (
+    staged_df
+    .withColumn("EmployeeKey", col("EmployeeKey").cast("integer"))
+    .withColumn("empid", col("empid").cast("integer"))
+    .withColumn("fullname", col("fullname").cast("string"))
+    .withColumn("title", col("title").cast("string"))
+    .withColumn("city", col("city").cast("string"))
+    .withColumn("country", col("country").cast("string"))
+    .withColumn("address", col("address").cast("string"))
     .withColumn("phone", col("phone").cast("string"))
+)
 
 # 5. Writing to Silver/Gold (Apply Platform Pattern)
-# Overwrite the DimEmployee table (idempotent write)
-df_final.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table_name)
+# Idempotent overwrite of DimEmployee
+(
+    staged_df
+    .repartition(1)
+    .write
+    .format("delta")
+    .mode("overwrite")
+    .option("overwriteSchema", "true")
+    .saveAsTable(target_table_name)
+)
 
-# Optimization: Z-ORDER on empid (high-cardinality business key)
-spark.sql(f"OPTIMIZE {target_table_name} ZORDER BY (empid)")
+# 6. Optimization (Z-ORDER on empid)
+deltaTable = DeltaTable.forName(spark, target_table_name)
+deltaTable.optimize().zorderBy("empid")

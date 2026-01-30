@@ -40,7 +40,7 @@ async def get_agent_a_prompt(project_id: Optional[str] = None, compiled: bool = 
     """Returns the current default system prompt for Agent A."""
     agent_a = AgentAService()
     if compiled and project_id:
-        knowledge_context = DiscoveryService.get_global_knowledge_context()
+        knowledge_context = "<!-- DYNAMIC KNOWLEDGE INJECTION -->"
         return {"prompt": agent_a.compile_prompt(knowledge_context)}
     return {"prompt": agent_a._load_prompt()}
 
@@ -49,7 +49,7 @@ async def get_agent_c_prompt(project_id: Optional[str] = None, compiled: bool = 
     if compiled and project_id:
         dev_service = DeveloperService()
         platform_spec = PlatformSpec().load_platform_spec()
-        knowledge_context = DiscoveryService.get_global_knowledge_context()
+        knowledge_context = "<!-- DYNAMIC KNOWLEDGE INJECTION: Rules are loaded at runtime based on Source Type & Target Lang -->"
         return {"prompt": dev_service.compile_prompt(platform_spec, knowledge_context)}
     agent_c = AgentCService()
     return {"prompt": agent_c._load_prompt()}

@@ -22,13 +22,13 @@ from pyspark.sql.types import *
 from pyspark.sql.window import Window
 
 # 2. Reading Bronze / Source
-# JDBC connection details (use Databricks secrets)
-db_url = dbutils.secrets.get('jdbc', 'sqlserver_url')
-db_user = dbutils.secrets.get('jdbc', 'sqlserver_user')
-db_password = dbutils.secrets.get('jdbc', 'sqlserver_password')
+# JDBC connection details (use dbutils.secrets for credentials)
+db_url = dbutils.secrets.get(scope="jdbc-secrets", key="db-url")
+db_user = dbutils.secrets.get(scope="jdbc-secrets", key="db-user")
+db_password = dbutils.secrets.get(scope="jdbc-secrets", key="db-password")
 
 # Parameter for supplierid threshold (replace with widget or parameter as needed)
-supplierid_threshold = dbutils.widgets.get('supplierid_threshold') if 'supplierid_threshold' in dbutils.widgets.get('') else 0
+supplierid_threshold = 0  # Default, replace with dbutils.widgets.get or parameterization
 
 source_query = f"""
 SELECT supplierid, companyname, address, postalcode, phone, city, country
@@ -41,11 +41,10 @@ df_source = spark.read.format("jdbc") \
     .option("user", db_user) \
     .option("password", db_password) \
     .option("dbtable", f"({source_query}) as src") \
-    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver") \
     .load()
 
 # 3. Transformations (Apply Logic)
-# No lookups or complex transforms per task definition
+# No lookups specified. Direct mapping.
 
 # 3.1 Surrogate Key Generation (STABLE & IDEMPOTENT)
 # SAFE MIGRATION PATTERN: Lookup existing keys, generate new ones only for new members.
@@ -76,20 +75,18 @@ df_new = df_new.withColumn(sk_col, row_number().over(window_spec) + max_sk)
 # 4. Union
 from pyspark.sql import DataFrame
 
-def union_by_name_safe(df1: DataFrame, df2: DataFrame) -> DataFrame:
+def union_by_name(df1: DataFrame, df2: DataFrame) -> DataFrame:
     # Ensure both DataFrames have the same columns in the same order
-    cols = sorted(set(df1.columns) | set(df2.columns))
-    df1 = df1.select([col(c) if c in df1.columns else lit(None).alias(c) for c in cols])
-    df2 = df2.select([col(c) if c in df2.columns else lit(None).alias(c) for c in cols])
-    return df1.unionByName(df2)
+    cols = [sk_col] + [c for c in df1.columns if c != sk_col]
+    return df1.select(*cols).unionByName(df2.select(*cols))
 
-df_with_sk = union_by_name_safe(df_existing, df_new)
+df_with_sk = union_by_name(df_existing, df_new)
 
 # 3.2 Unknown Member Handling (For Dimensions)
 def ensure_unknown_member(df):
     # Define the schema for the unknown member
     unknown_row = {
-        "SupplierKey": -1,
+        sk_col: -1,
         "supplierid": -1,
         "companyname": "Unknown",
         "address": "Unknown",
@@ -99,44 +96,47 @@ def ensure_unknown_member(df):
         "country": "Unknown"
     }
     # Check if unknown member exists
-    if df.filter(col("SupplierKey") == -1).count() == 0:
+    if df.filter(col(sk_col) == -1).count() == 0:
         unknown_df = spark.createDataFrame([unknown_row])
-        df = union_by_name_safe(df, unknown_df)
+        df = df.unionByName(unknown_df)
     return df
 
 df_final = ensure_unknown_member(df_with_sk)
 
 # 4. Mandatory Type Casting (STRICT)
-# Target schema (from context):
-# SupplierKey: INTEGER
-# supplierid: INTEGER
-# companyname: STRING
-# address: STRING
-# postalcode: STRING
-# phone: STRING
-# city: STRING
-# country: STRING
+# Target schema is not provided, so infer types based on platform rules and SSIS types
+# supplierid: DT_I4 -> INTEGER
+# companyname: DT_WSTR -> STRING
+# address: DT_WSTR -> STRING
+# postalcode: DT_WSTR -> STRING
+# phone: DT_WSTR -> STRING
+# city: DT_WSTR -> STRING
+# country: DT_WSTR -> STRING
+# SupplierKey: Surrogate Key -> INTEGER
 
-cast_map = {
-    "SupplierKey": "integer",
-    "supplierid": "integer",
-    "companyname": "string",
-    "address": "string",
-    "postalcode": "string",
-    "phone": "string",
-    "city": "string",
-    "country": "string"
-}
-for col_name, target_type in cast_map.items():
-    if col_name in df_final.columns:
-        df_final = df_final.withColumn(col_name, col(col_name).cast(target_type))
+df_final = df_final.withColumn("SupplierKey", col("SupplierKey").cast("integer")) \
+    .withColumn("supplierid", col("supplierid").cast("integer")) \
+    .withColumn("companyname", col("companyname").cast("string")) \
+    .withColumn("address", col("address").cast("string")) \
+    .withColumn("postalcode", col("postalcode").cast("string")) \
+    .withColumn("phone", col("phone").cast("string")) \
+    .withColumn("city", col("city").cast("string")) \
+    .withColumn("country", col("country").cast("string"))
 
 # 5. Writing to Silver/Gold (Apply Platform Pattern)
-# Idempotent overwrite (since this is a dimension, not SCD2)
-# [DISABLED_BY_ARCHITECT] df_final.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table_name)
+# Idempotent overwrite of the dimension table
+(
+    df_final
+# [DISABLED_BY_ARCHITECT]     .write
+    .format("delta")
+    .mode("overwrite")
+    .option("overwriteSchema", "true")
+# [DISABLED_BY_ARCHITECT]     .saveAsTable(target_table_name)
+)
 
-# Optimization: Z-ORDER on supplierid (high-cardinality business key)
-# [DISABLED_BY_ARCHITECT] spark.sql(f"OPTIMIZE {target_table_name} ZORDER BY (supplierid)")
+# 6. Optimization (Z-ORDER on Business Key)
+deltaTable = DeltaTable.forName(spark, target_table_name)
+deltaTable.optimize().zorderBy("supplierid")
 
 
 # Apply Bronze Standard
